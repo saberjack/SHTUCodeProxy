@@ -17,6 +17,7 @@ from proxy import (
     filter_thinking_text_delta,
     merge_tool_call,
     merge_tool_call_payloads,
+    codex_function_call_item,
     parse_tool_arguments,
     parse_pseudo_function_calls,
     responses_completed_payload,
@@ -116,6 +117,14 @@ def exercise_tool_call_translation() -> None:
     assert_true(tool_calls[0]["id"] == "call_01", "merged tool call id mismatch")
     assert_true(parse_tool_arguments(tool_calls[0]["arguments"])["path"] == "README.md", "tool arguments parse mismatch")
     assert_true(stop_reason_from_done({"finish_reason": "tool_calls"}, tool_calls) == "tool_use", "tool stop reason mismatch")
+
+    shell_item = codex_function_call_item({"name": "shell_exec", "arguments": '{"command":"Write-Output ok"}'})
+    shell_args = json.loads(shell_item["arguments"])
+    assert_true(shell_item["name"] == "shell", "Codex shell aliases should normalize to shell")
+    assert_true(shell_args["command"] == ["powershell.exe", "-Command", "Write-Output ok"], "Codex shell command should be an argv array")
+    echo_item = codex_function_call_item({"name": "shell", "arguments": {"command": ["echo", "sandbox ok"]}})
+    echo_args = json.loads(echo_item["arguments"])
+    assert_true(echo_args["command"][0] == "powershell.exe", "bare Windows shell commands should be wrapped through PowerShell")
 
 
 def exercise_chat_completion_json_to_responses() -> None:
@@ -397,6 +406,8 @@ def exercise_codex_config_writer(tmpdir: Path) -> None:
     assert_true('model_provider = "shtu_proxy"' in text, "codex root model_provider should be set")
     assert_true('sandbox_mode = "workspace-write"' in text, "codex sandbox_mode should default to workspace-write")
     assert_true('[features]' in text and 'hooks = true' in text, "codex hooks feature should be enabled")
+    if os.name == "nt":
+        assert_true('[windows]' in text and 'sandbox = "elevated"' in text, "codex windows sandbox should be elevated on Windows")
     assert_true(f'base_url = "http://{config.host}:{config.port}/v1"' in text, "codex config base_url mismatch")
     assert_true('model = "codex-model"' in text, "codex config should use independent Codex model selection")
     auth = json.loads(auth_file.read_text(encoding="utf-8"))
@@ -433,6 +444,8 @@ def exercise_codex_config_writer(tmpdir: Path) -> None:
         'model_reasoning_effort = "high"',
         '[features]',
         'hooks = false',
+        '[windows]',
+        'sandbox = "read-only"',
         '[projects."C:\\\\Users\\\\Administrator"]',
         'trust_level = "trusted"',
         '',
@@ -461,6 +474,8 @@ def exercise_codex_config_writer(tmpdir: Path) -> None:
     assert_true(root_text.count('model_provider = "shtu_proxy"') == 1, "codex model_provider should be written at TOML root")
     assert_true('sandbox_mode = "workspace-write"' in root_text, "codex config writer should repair read-only sandbox mode")
     assert_true('[features]' in repaired and 'hooks = true' in repaired, "codex config writer should enable hooks")
+    if os.name == "nt":
+        assert_true('[windows]' in repaired and 'sandbox = "elevated"' in repaired, "codex config writer should repair Windows sandbox mode")
     assert_true('[model_providers.custom]' not in repaired, "codex config writer should remove old direct custom provider")
     assert_true('[tui.model_availability_nux]' not in repaired, "codex config writer should remove stale tui availability sections")
     assert_true("[model_providers.shtu_proxy]" in repaired, "codex config writer should recover with a clean proxy config")

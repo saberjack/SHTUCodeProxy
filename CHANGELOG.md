@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.2.22 - 2026-05-12
+
+Codex Windows shell compatibility release.
+
+### Fixed
+
+- Matched CC switch behavior by preserving or forcing `[windows] sandbox = "elevated"` for Codex configs on Windows while keeping `sandbox_mode = "workspace-write"`.
+- Normalized Codex shell tool aliases such as `shell_exec`, `exec_command`, and `bash` to `shell`.
+- Converted shell string commands and bare argv commands such as `echo` into PowerShell argv arrays so Codex's Windows shell schema can execute them.
+
 ## v3.2.21 - 2026-05-12
 
 Codex sandbox path case preservation release.

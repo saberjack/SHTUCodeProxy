@@ -14,6 +14,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import traceback
@@ -973,6 +974,37 @@ def tool_arguments_json(arguments: Any) -> str:
     return json_dumps_compact(parse_tool_arguments(arguments))
 
 
+def codex_function_call_item(tool_call: Dict[str, Any], offset: int = 0) -> Dict[str, Any]:
+    name = str(tool_call.get("name") or "tool")
+    arguments = parse_tool_arguments(tool_call.get("arguments", ""))
+    normalized_name = name
+    if name.lower() in ("shell_exec", "exec_command", "execute_command", "bash"):
+        normalized_name = "shell"
+    if normalized_name == "shell":
+        command = arguments.get("command")
+        if isinstance(command, str):
+            arguments["command"] = ["powershell.exe", "-Command", command]
+        elif isinstance(command, list):
+            command_parts = [str(part) for part in command if part is not None]
+            executable = command_parts[0].lower() if command_parts else ""
+            direct_executables = {"powershell.exe", "powershell", "pwsh", "pwsh.exe", "cmd", "cmd.exe", "python", "python.exe", "node", "node.exe"}
+            if executable and executable not in direct_executables:
+                joined = subprocess.list2cmdline(command_parts)
+                arguments["command"] = ["powershell.exe", "-Command", joined]
+        else:
+            fallback = arguments.get("arguments")
+            if isinstance(fallback, str) and fallback.strip():
+                arguments["command"] = ["powershell.exe", "-Command", fallback]
+    return {
+        "id": tool_call.get("id") or f"fc_proxy_{now_ms()}_{offset}",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": tool_call.get("id") or f"call_proxy_{now_ms()}_{offset}",
+        "name": normalized_name,
+        "arguments": json_dumps_compact(arguments),
+    }
+
+
 def filter_thinking_text_delta(text: str, state: Dict[str, Any]) -> str:
     if not text:
         return ""
@@ -1156,14 +1188,7 @@ def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input
         output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
     parsed_tool_calls = chat_tool_call_payloads(message.get("tool_calls"), False) + pseudo_tool_calls
     for offset, tool_call in enumerate(parsed_tool_calls):
-        output.append({
-            "id": tool_call.get("id") or f"fc_proxy_{now_ms()}_{offset}",
-            "type": "function_call",
-            "status": "completed",
-            "call_id": tool_call.get("id") or f"call_proxy_{now_ms()}_{offset}",
-            "name": tool_call.get("name") or "tool",
-            "arguments": tool_arguments_json(tool_call.get("arguments", "")),
-        })
+        output.append(codex_function_call_item(tool_call, offset))
     response_payload = responses_completed_payload(response_id(), model, output, input_tokens, output_text)
     usage = payload.get("usage")
     if isinstance(usage, dict):
@@ -1394,7 +1419,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             emit("response.output_item.done", {"output_index": 0, "item": text_item})
             output.append(text_item)
         for offset, tool_call in enumerate(tool_calls):
-            item = {"id": tool_call.get("id") or f"fc_proxy_{now_ms()}_{offset}", "type": "function_call", "status": "completed", "call_id": tool_call.get("id") or f"call_proxy_{now_ms()}_{offset}", "name": tool_call.get("name") or "tool", "arguments": tool_arguments_json(tool_call.get("arguments", ""))}
+            item = codex_function_call_item(tool_call, offset)
             output_index = len(output)
             emit("response.output_item.added", {"output_index": output_index, "item": dict(item, status="in_progress")})
             emit("response.function_call_arguments.delta", {"item_id": item["id"], "output_index": output_index, "delta": item["arguments"]})
@@ -1455,7 +1480,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if output_text:
             output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
         for offset, tool_call in enumerate(tool_calls):
-            output.append({"id": tool_call.get("id") or f"fc_proxy_{now_ms()}_{offset}", "type": "function_call", "status": "completed", "call_id": tool_call.get("id") or f"call_proxy_{now_ms()}_{offset}", "name": tool_call.get("name") or "tool", "arguments": tool_arguments_json(tool_call.get("arguments", ""))})
+            output.append(codex_function_call_item(tool_call, offset))
         payload = responses_completed_payload(response_id(), model_config.model_id, output, estimate_value_tokens(body.get("input")), output_text)
         if done_payload and isinstance(done_payload.get("response"), dict):
             payload["usage"] = done_payload["response"].get("usage") or payload["usage"]

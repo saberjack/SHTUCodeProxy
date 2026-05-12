@@ -55,6 +55,9 @@ def validate_codex_config(text: str) -> None:
     features = parsed.get("features", {})
     if not isinstance(features, dict) or features.get("hooks") is not True:
         raise ValueError("Codex features.hooks must be enabled")
+    windows = parsed.get("windows", {})
+    if os.name == "nt" and (not isinstance(windows, dict) or windows.get("sandbox") != "elevated"):
+        raise ValueError("Codex windows.sandbox must be elevated on Windows")
     provider = parsed.get("model_providers", {}).get("shtu_proxy", {})
     if "env_key" in provider:
         raise ValueError("Codex shtu_proxy provider should use auth.json instead of requiring an environment variable")
@@ -154,10 +157,13 @@ def codex_preserved_config_block(existing: str) -> str:
     for key, value in feature_values.items():
         lines.append(f"{key} = {json.dumps(value) if isinstance(value, str) else str(value).lower()}")
     windows = parsed.get("windows") if isinstance(parsed.get("windows"), dict) else {}
-    if windows:
+    windows_values = dict(windows)
+    if os.name == "nt":
+        windows_values["sandbox"] = "elevated"
+    if windows_values:
         lines.append("")
         lines.append("[windows]")
-        for key, value in windows.items():
+        for key, value in windows_values.items():
             lines.append(f"{key} = {json.dumps(value) if isinstance(value, str) else str(value).lower()}")
     project_blocks = codex_preserved_project_blocks(existing)
     if project_blocks:
