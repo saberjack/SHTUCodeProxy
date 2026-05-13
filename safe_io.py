@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 
+ORIGINAL_BACKUP_SUFFIX = ".original.bak"
+ORIGINAL_MISSING_SUFFIX = ".original.missing"
+
+
 def powershell_copy_text(source: Path, target: Path) -> None:
     script = source.with_name(f".{target.name}.copy.ps1")
     script.write_text(
@@ -46,6 +50,78 @@ def backup_existing_file(target: Path) -> Optional[Path]:
         fallback = fallback_dir / f"{target.name}.bak_{timestamp}"
         fallback.write_bytes(data)
         return fallback
+
+
+def snapshot_original_file(target: Path) -> Optional[Path]:
+    missing_marker = target.with_name(f"{target.name}{ORIGINAL_MISSING_SUFFIX}")
+    if not target.exists():
+        if not missing_marker.exists():
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                missing_marker.write_text("missing before first SHTUClaudeProxy write\n", encoding="utf-8")
+            except PermissionError:
+                fallback_dir = Path(__file__).resolve().parent / "backups"
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                missing_marker = fallback_dir / f"{target.name}{ORIGINAL_MISSING_SUFFIX}"
+                if not missing_marker.exists():
+                    missing_marker.write_text("missing before first SHTUClaudeProxy write\n", encoding="utf-8")
+        return missing_marker
+    original = target.with_name(f"{target.name}{ORIGINAL_BACKUP_SUFFIX}")
+    if original.exists():
+        return original
+    data = target.read_bytes()
+    try:
+        original.write_bytes(data)
+        return original
+    except PermissionError:
+        fallback_dir = Path(__file__).resolve().parent / "backups"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        fallback = fallback_dir / f"{target.name}{ORIGINAL_BACKUP_SUFFIX}"
+        if not fallback.exists():
+            fallback.write_bytes(data)
+        return fallback
+
+
+def latest_backup_for(target: Path, *, original: bool = False) -> Optional[Path]:
+    if original:
+        candidates = [target.with_name(f"{target.name}{ORIGINAL_BACKUP_SUFFIX}")]
+        missing_candidates = [target.with_name(f"{target.name}{ORIGINAL_MISSING_SUFFIX}")]
+        fallback = Path(__file__).resolve().parent / "backups" / f"{target.name}{ORIGINAL_BACKUP_SUFFIX}"
+        candidates.append(fallback)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        missing_candidates.append(Path(__file__).resolve().parent / "backups" / f"{target.name}{ORIGINAL_MISSING_SUFFIX}")
+        for candidate in missing_candidates:
+            if candidate.exists():
+                return candidate
+        return None
+    candidates = list(target.parent.glob(f"{target.name}.bak_*")) if target.parent.exists() else []
+    fallback_dir = Path(__file__).resolve().parent / "backups"
+    if fallback_dir.exists():
+        candidates.extend(fallback_dir.glob(f"{target.name}.bak_*"))
+    return max(candidates, key=lambda path: path.stat().st_mtime, default=None)
+
+
+def restore_latest_backup(target: Path, *, original: bool = False) -> Optional[Path]:
+    backup = latest_backup_for(target, original=original)
+    if backup is None:
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        backup_existing_file(target)
+    if backup.name.endswith(ORIGINAL_MISSING_SUFFIX):
+        if target.exists():
+            target.unlink()
+        return backup
+    try:
+        shutil.copy2(backup, target)
+    except PermissionError:
+        if target.drive or str(target).startswith("\\\\"):
+            powershell_copy_text(backup, target)
+        else:
+            raise
+    return backup
 
 
 def atomic_write_text(

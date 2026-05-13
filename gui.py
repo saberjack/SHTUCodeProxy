@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import threading
 import tkinter as tk
@@ -27,6 +28,7 @@ class ProxyApp(tk.Tk):
         self.server: Optional[ThreadingHTTPServer] = None
         self.server_thread: Optional[threading.Thread] = None
         self.selected_index: Optional[int] = None
+        self.danger_sandbox_confirmed = False
 
         self.host_var = tk.StringVar(value=self.config_data.host)
         self.port_var = tk.StringVar(value=str(self.config_data.port))
@@ -55,11 +57,14 @@ class ProxyApp(tk.Tk):
         self.upstream_model_var = tk.StringVar()
         self.api_format_var = tk.StringVar(value=DEFAULT_API_FORMAT)
         self.status_var = tk.StringVar(value="Stopped")
+        self.connection_status_var = tk.StringVar(value="Proxy status: not checked")
 
         self.configure_styles()
         self.create_widgets()
         self.refresh_model_list()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.refresh_connection_status()
+        self.after(5000, self.refresh_connection_status_loop)
         self.after(300, self.show_first_run_tip)
 
     def configure_styles(self) -> None:
@@ -70,6 +75,7 @@ class ProxyApp(tk.Tk):
         style.configure("StepTitle.TLabel", font=("Segoe UI", 10, "bold"))
         style.configure("Hint.TLabel", foreground="#555555")
         style.configure("Danger.TLabel", foreground="#b00020", font=("Segoe UI", 10, "bold"))
+        style.configure("Danger.TButton", font=("Segoe UI", 10, "bold"), foreground="#b00020")
         style.configure("Status.TLabel", font=("Segoe UI", 10, "bold"), foreground="#0f6b2f")
 
     def create_widgets(self) -> None:
@@ -162,6 +168,16 @@ class ProxyApp(tk.Tk):
             "Success.TButton",
         )
 
+        status_frame = ttk.LabelFrame(root, text="Connection, Safety, and Recovery")
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+        status_frame.columnconfigure(0, weight=1)
+        ttk.Label(status_frame, textvariable=self.connection_status_var, style="Status.TLabel").grid(row=0, column=0, padx=8, pady=6, sticky="w")
+        ttk.Button(status_frame, text="Refresh Status", command=self.refresh_connection_status).grid(row=0, column=1, padx=4, pady=6, sticky="ew")
+        ttk.Button(status_frame, text="Check Codex Health", command=self.check_codex_health).grid(row=0, column=2, padx=4, pady=6, sticky="ew")
+        ttk.Button(status_frame, text="Restore Recent Client Backup", command=lambda: self.restore_client_config(False)).grid(row=0, column=3, padx=4, pady=6, sticky="ew")
+        ttk.Button(status_frame, text="Restore Original Client Config", command=lambda: self.restore_client_config(True), style="Danger.TButton").grid(row=0, column=4, padx=4, pady=6, sticky="ew")
+        ttk.Label(status_frame, text="Backups cover the selected client mode: Claude settings or Codex config/auth.", style="Hint.TLabel").grid(row=1, column=0, columnspan=5, padx=8, pady=(0, 6), sticky="w")
+
         server_frame = ttk.LabelFrame(root, text="Server")
         server_frame.pack(fill=tk.X)
         for column in range(8):
@@ -221,7 +237,9 @@ class ProxyApp(tk.Tk):
         self.codex_model_combo.grid(row=0, column=1, sticky="w")
         self.codex_model_combo.bind("<<ComboboxSelected>>", self.on_codex_model_changed)
         ttk.Label(codex_cell, text="Sandbox").grid(row=0, column=2, padx=(16, 8), sticky="w")
-        ttk.Combobox(codex_cell, textvariable=self.codex_sandbox_mode_var, values=CODEX_SANDBOX_MODES, state="readonly", width=20).grid(row=0, column=3, sticky="w")
+        sandbox_combo = ttk.Combobox(codex_cell, textvariable=self.codex_sandbox_mode_var, values=CODEX_SANDBOX_MODES, state="readonly", width=20)
+        sandbox_combo.grid(row=0, column=3, sticky="w")
+        sandbox_combo.bind("<<ComboboxSelected>>", self.on_codex_sandbox_changed)
         ttk.Label(codex_cell, text="Writes Codex model, auth key, sandbox_mode, and hooks.", style="Hint.TLabel").grid(row=0, column=4, padx=8, sticky="w")
         ttk.Label(env_frame, textvariable=self.route_summary_var, style="StepTitle.TLabel").grid(row=3, column=0, columnspan=5, padx=8, pady=(2, 6), sticky="w")
 
@@ -358,6 +376,22 @@ class ProxyApp(tk.Tk):
     def on_codex_model_changed(self, _event: object) -> None:
         self.update_model_route_summary()
 
+    def on_codex_sandbox_changed(self, _event: object) -> None:
+        if self.codex_sandbox_mode_var.get() != "danger-full-access":
+            return
+        confirmed = messagebox.askyesno(
+            "Dangerous sandbox mode",
+            "danger-full-access disables Codex filesystem sandboxing for model-generated commands.\n\n"
+            "Only use it when you fully trust the workspace and commands. Continue?",
+            icon="warning",
+        )
+        if not confirmed:
+            self.codex_sandbox_mode_var.set("workspace-write")
+            self.danger_sandbox_confirmed = False
+        else:
+            self.danger_sandbox_confirmed = True
+        self.update_model_route_summary()
+
     def update_model_route_summary(self) -> None:
         labels = (
             ("Main", "ANTHROPIC_MODEL"),
@@ -369,6 +403,78 @@ class ProxyApp(tk.Tk):
         summary = "Effective: " + " | ".join(f"{label}={self.model_env_vars[key].get()}" for label, key in labels)
         summary += f" | Codex={self.codex_model_var.get()}"
         self.route_summary_var.set(summary)
+
+    def current_client_paths(self) -> list[str]:
+        if self.client_mode_var.get() == "codex":
+            return [self.codex_config_path_var.get().strip(), self.codex_auth_path_var.get().strip()]
+        return [self.claude_settings_path_var.get().strip()]
+
+    def refresh_connection_status_loop(self) -> None:
+        self.refresh_connection_status()
+        self.after(5000, self.refresh_connection_status_loop)
+
+    def refresh_connection_status(self) -> None:
+        host = self.host_var.get().strip() or "127.0.0.1"
+        try:
+            port = int(self.port_var.get().strip())
+        except ValueError:
+            self.connection_status_var.set("Proxy status: invalid port")
+            return
+        owned = self.server is not None
+        listening = False
+        try:
+            with socket.create_connection((host, port), timeout=0.35):
+                listening = True
+        except OSError:
+            listening = False
+        if owned and listening:
+            status = f"Proxy status: listening on http://{host}:{port} (started by this app)"
+        elif owned:
+            status = f"Proxy status: starting/stopping on http://{host}:{port} (owned by this app)"
+        elif listening:
+            status = f"Proxy status: port {port} is already listening (external process)"
+        else:
+            status = f"Proxy status: not listening on http://{host}:{port}"
+        self.connection_status_var.set(status)
+
+    def restore_client_config(self, original: bool) -> None:
+        self.save()
+        mode = self.client_mode_var.get()
+        label = "original" if original else "most recent"
+        warning = (
+            f"Restore the {label} backup for {mode} client config?\n\n"
+            "The current file will be backed up before restore."
+        )
+        if not messagebox.askyesno("Restore client config", warning, icon="warning"):
+            return
+        restored: list[str] = []
+        errors: list[str] = []
+        for path_value in self.current_client_paths():
+            if not path_value:
+                continue
+            try:
+                backup = cli.restore_client_backup(path_value, original=original)
+                restored.append(f"{path_value}\n  from {backup}")
+            except Exception as exc:
+                errors.append(f"{path_value}: {exc}")
+        self.refresh_connection_status()
+        if restored:
+            self.append_log(f"Restored {mode} {label} backup")
+        message = ""
+        if restored:
+            message += "Restored:\n" + "\n".join(restored)
+        if errors:
+            message += ("\n\n" if message else "") + "Not restored:\n" + "\n".join(errors)
+        messagebox.showinfo("Restore complete" if restored else "Restore unavailable", message or "No matching backup was found.")
+
+    def check_codex_health(self) -> None:
+        self.save()
+        ok, messages = cli.codex_health_report(self.config_data)
+        title = "Codex health OK" if ok else "Codex health needs attention"
+        prefix = "All required Codex proxy settings look valid." if ok else "Some Codex settings need repair. Click Write Client Config to fix managed fields."
+        message = prefix + "\n\n" + "\n".join(f"- {item}" for item in messages)
+        self.append_log(title)
+        messagebox.showinfo(title, message)
 
     def selected_codex_model_id(self) -> str:
         model_ids = [model.model_id for model in self.config_data.models]
@@ -539,6 +645,20 @@ class ProxyApp(tk.Tk):
         self.config_data.default_model_id = self.config_data.model_env["ANTHROPIC_MODEL"]
         self.config_data.codex_model_id = self.selected_codex_model_id()
         sandbox_mode = self.codex_sandbox_mode_var.get().strip()
+        if sandbox_mode == "danger-full-access" and self.client_mode_var.get() == "codex" and not self.danger_sandbox_confirmed:
+            confirmed = messagebox.askyesno(
+                "Confirm danger-full-access",
+                "You selected danger-full-access for Codex. This bypasses normal sandbox restrictions.\n\n"
+                "Keep this mode for the next Codex config write?",
+                icon="warning",
+            )
+            if not confirmed:
+                sandbox_mode = "workspace-write"
+                self.danger_sandbox_confirmed = False
+            else:
+                self.danger_sandbox_confirmed = True
+        elif sandbox_mode != "danger-full-access":
+            self.danger_sandbox_confirmed = False
         self.config_data.codex_sandbox_mode = sandbox_mode if sandbox_mode in CODEX_SANDBOX_MODES else "workspace-write"
         self.codex_sandbox_mode_var.set(self.config_data.codex_sandbox_mode)
         self.config_data.timeout = timeout

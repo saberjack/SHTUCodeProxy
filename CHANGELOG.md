@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.5.1 - 2026-05-13
+
+User safety and recovery workflow release.
+
+### Added
+
+- Added a red warning confirmation for Codex `danger-full-access` sandbox mode.
+- Added connection status showing whether the configured port is not listening, externally listening, or started by this app.
+- Added recovery buttons for restoring the most recent client backup or the original client config for both Claude Code and Codex modes.
+- Added Codex health check for TOML syntax, auth mode, provider/profile, hooks, sandbox, project entries, and MCP server preservation.
+
+### Fixed
+
+- Captured original client config snapshots before first managed writes, including the case where the original file did not exist.
+- Improved the GUI workflow so users can see connection state and recover broken client config without manually searching backup files.
+
 ## v3.2.25 - 2026-05-13
 
 Codex config preservation hardening release.

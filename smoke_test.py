@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import cli
+from safe_io import restore_latest_backup, snapshot_original_file
 from config_store import AppConfig, MODEL_ENV_KEYS, ModelConfig, save_config, tokens_from_api_notes
 from platform_utils import launch_script_text, portable_claude_path, portable_settings_path
 from proxy import (
@@ -567,6 +568,29 @@ def exercise_codex_config_writer(tmpdir: Path) -> None:
     assert_true(mixed_case_header in case_text, "Codex writer must preserve project path case and quoted header form")
     assert_true(literal_case_header in case_text, "Codex writer must preserve literal project path case")
 
+    health_ok, health_messages = cli.codex_health_report(config)
+    assert_true(health_ok, "Codex health check should pass for freshly written config")
+    assert_true(any("MCP servers preserved" in item for item in health_messages), "Codex health should report preserved MCP servers")
+
+
+def exercise_backup_restore(tmpdir: Path) -> None:
+    existing = tmpdir / "existing.json"
+    existing.write_text('{"old": true}', encoding="utf-8")
+    original = snapshot_original_file(existing)
+    assert_true(original is not None and original.exists(), "original backup should be created for existing file")
+    existing.write_text('{"new": true}', encoding="utf-8")
+    restored = restore_latest_backup(existing, original=True)
+    assert_true(restored == original, "original backup path should be restored")
+    assert_true('"old": true' in existing.read_text(encoding="utf-8"), "original restore should restore initial content")
+
+    missing = tmpdir / "missing.json"
+    marker = snapshot_original_file(missing)
+    assert_true(marker is not None and marker.exists(), "missing original marker should be created")
+    missing.write_text('{"created": true}', encoding="utf-8")
+    restored_marker = restore_latest_backup(missing, original=True)
+    assert_true(restored_marker == marker, "missing original marker should be used for restore")
+    assert_true(not missing.exists(), "restoring originally missing file should remove generated file")
+
 
 def exercise_multi_tool_call_delta() -> None:
     kind, parsed = extract_text_delta(None, json.dumps({
@@ -753,6 +777,7 @@ def main() -> int:
         exercise_count_tokens_estimate()
         exercise_codex_responses_passthrough()
         exercise_codex_config_writer(tmpdir)
+        exercise_backup_restore(tmpdir)
         exercise_multi_tool_call_delta()
         exercise_cumulative_tool_call_delta()
         exercise_tool_argument_repair_and_thinking_filter()

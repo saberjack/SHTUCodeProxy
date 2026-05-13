@@ -13,7 +13,7 @@ from typing import Dict
 from config_store import AppConfig, CODEX_SANDBOX_MODES, DEFAULT_CODEX_SANDBOX_MODE, MODEL_ENV_KEYS, config_path, ensure_builtin_model_routes, load_config, save_config
 from platform_utils import launch_script_filename, launch_script_text
 from proxy import ProxyHandler, ThreadingHTTPServer
-from safe_io import atomic_write_text, backup_existing_file
+from safe_io import atomic_write_text, backup_existing_file, restore_latest_backup, snapshot_original_file
 
 
 def claude_env(config: AppConfig) -> Dict[str, str]:
@@ -28,6 +28,7 @@ def claude_env(config: AppConfig) -> Dict[str, str]:
 def write_claude_settings(config: AppConfig) -> Path:
     settings_path = Path(config.claude_settings_path).expanduser()
     settings_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_original_file(settings_path)
     existing: dict[str, object] = {}
     if settings_path.exists():
         try:
@@ -232,6 +233,7 @@ def write_codex_config(config: AppConfig) -> Path:
     config_path_value = getattr(config, "codex_config_path", "") or str(Path.home() / ".codex" / "config.toml")
     target = Path(config_path_value).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_original_file(target)
     existing = ""
     if target.exists():
         existing = target.read_text(encoding="utf-8-sig")
@@ -251,6 +253,7 @@ def codex_api_key(config: AppConfig) -> str:
 def write_codex_auth(config: AppConfig) -> Path:
     auth_path_value = getattr(config, "codex_auth_path", "") or str(Path.home() / ".codex" / "auth.json")
     target = Path(auth_path_value).expanduser()
+    snapshot_original_file(target)
     payload: dict[str, object] = {}
     if target.exists():
         try:
@@ -271,6 +274,84 @@ def write_codex_files(config: AppConfig) -> tuple[Path, Path]:
     if not getattr(config, "codex_model_id", ""):
         config.codex_model_id = config.default_model_id
     return write_codex_config(config), write_codex_auth(config)
+
+
+def restore_client_backup(path_value: str, *, original: bool = False) -> Path:
+    target = Path(path_value).expanduser()
+    restored = restore_latest_backup(target, original=original)
+    if restored is None:
+        kind = "original" if original else "recent"
+        raise FileNotFoundError(f"No {kind} backup found for {target}")
+    return restored
+
+
+def codex_health_report(config: AppConfig) -> tuple[bool, list[str]]:
+    ensure_builtin_model_routes(config)
+    messages: list[str] = []
+    ok = True
+    config_target = Path(getattr(config, "codex_config_path", "") or Path.home() / ".codex" / "config.toml").expanduser()
+    auth_target = Path(getattr(config, "codex_auth_path", "") or Path.home() / ".codex" / "auth.json").expanduser()
+    if not config_target.exists():
+        return False, [f"Missing config.toml: {config_target}"]
+    try:
+        text = config_target.read_text(encoding="utf-8-sig")
+        parsed = tomllib.loads(text)
+        validate_codex_config(text)
+        messages.append("config.toml TOML syntax: OK")
+    except Exception as exc:
+        return False, [f"config.toml invalid: {exc}"]
+    expected_model = getattr(config, "codex_model_id", "") or config.default_model_id
+    if parsed.get("model") == expected_model:
+        messages.append(f"root model: OK ({expected_model})")
+    else:
+        ok = False
+        messages.append(f"root model mismatch: {parsed.get('model')!r} != {expected_model!r}")
+    if parsed.get("sandbox_mode") in CODEX_SANDBOX_MODES:
+        messages.append(f"sandbox_mode: OK ({parsed.get('sandbox_mode')})")
+    else:
+        ok = False
+        messages.append("sandbox_mode: invalid or missing")
+    features = parsed.get("features", {}) if isinstance(parsed.get("features"), dict) else {}
+    if features.get("hooks") is True and "codex_hooks" not in features:
+        messages.append("features.hooks: OK")
+    else:
+        ok = False
+        messages.append("features.hooks: missing or deprecated codex_hooks still present")
+    provider = parsed.get("model_providers", {}).get("shtu_proxy", {}) if isinstance(parsed.get("model_providers"), dict) else {}
+    if provider.get("wire_api") == "responses" and provider.get("base_url") == f"http://{config.host}:{config.port}/v1" and provider.get("requires_openai_auth") is True:
+        messages.append("shtu_proxy provider: OK")
+    else:
+        ok = False
+        messages.append("shtu_proxy provider: mismatch")
+    profile = parsed.get("profiles", {}).get("shtu_proxy", {}) if isinstance(parsed.get("profiles"), dict) else {}
+    if profile.get("model_provider") == "shtu_proxy" and profile.get("model") == expected_model:
+        messages.append("shtu_proxy profile: OK")
+    else:
+        ok = False
+        messages.append("shtu_proxy profile: mismatch")
+    mcp_servers = parsed.get("mcp_servers", {})
+    if isinstance(mcp_servers, dict) and mcp_servers:
+        messages.append(f"MCP servers preserved: {', '.join(sorted(mcp_servers.keys()))}")
+    else:
+        messages.append("MCP servers: none configured")
+    projects = parsed.get("projects", {})
+    if isinstance(projects, dict) and projects:
+        messages.append(f"trusted project entries: {len(projects)}")
+    if auth_target.exists():
+        try:
+            auth = json.loads(auth_target.read_text(encoding="utf-8-sig"))
+            if auth.get("auth_mode") == "apikey" and auth.get("OPENAI_API_KEY"):
+                messages.append("auth.json API key mode: OK")
+            else:
+                ok = False
+                messages.append("auth.json API key mode: missing")
+        except Exception as exc:
+            ok = False
+            messages.append(f"auth.json invalid: {exc}")
+    else:
+        ok = False
+        messages.append(f"Missing auth.json: {auth_target}")
+    return ok, messages
 
 
 def install_launch_script(config: AppConfig) -> Path:
