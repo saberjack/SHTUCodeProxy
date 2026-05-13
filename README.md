@@ -1,4 +1,4 @@
-﻿# SHTUClaudeProxy
+﻿# SHTUCodeProxy
 
 > **Important:** GPT-series models should use the `responses` API Format.
 
