@@ -48,6 +48,18 @@ if [[ "$ONE_FILE_ONLY" != "1" ]]; then
   mkdir -p "build/$PACKAGE_ROOT"
   cp -R "dist/$FOLDER_NAME" "build/$PACKAGE_ROOT/$FOLDER_NAME"
   cp linux_launcher.py "build/$PACKAGE_ROOT/run_shtucodeproxy.py"
+  cp "assets/shtucodeproxy.ico" "build/$PACKAGE_ROOT/shtucodeproxy.ico"
+  cat > "build/$PACKAGE_ROOT/shtucodeproxy.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=SHTUCodeProxy
+Comment=Claude Code and Codex local bridge
+Exec=python3 run_shtucodeproxy.py
+Icon=shtucodeproxy
+Terminal=false
+Categories=Development;Utility;
+StartupWMClass=SHTUCodeProxy
+EOF
   cat > "build/$PACKAGE_ROOT/README-LINUX.txt" <<EOF
 SHTUCodeProxy v${VERSION} Linux package
 
@@ -57,6 +69,11 @@ Usage:
 
 The bundled SHTUCodeProxy runtime includes Python, PyQt5, and Qt libraries.
 You do not need to install Python packages such as PyQt5 or PyInstaller.
+
+Optional desktop icon:
+- Copy shtucodeproxy.ico to ~/.local/share/icons/shtucodeproxy.ico
+- Copy shtucodeproxy.desktop to ~/.local/share/applications/shtucodeproxy.desktop
+- Edit the Exec path in the desktop file to this extracted folder if needed.
 EOF
   tar -cJf "release/${APP_NAME}-python-launcher.tar.xz" -C build "$PACKAGE_ROOT"
   echo "Python-launcher folder package complete: release/${APP_NAME}-python-launcher.tar.xz"

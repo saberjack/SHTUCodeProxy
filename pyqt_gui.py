@@ -4,6 +4,7 @@ import json
 import socket
 import sys
 import threading
+import ctypes
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 
@@ -393,8 +394,22 @@ class FocusWheelComboBox(QComboBox):
             event.ignore()
 
 
+def resource_path(*parts: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base.joinpath(*parts)
+
+
+def set_windows_app_id() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SHTUCodeProxy.SHTUCodeProxy.4")
+    except Exception:
+        pass
+
+
 def build_app_icon() -> QIcon:
-    icon_path = Path(__file__).resolve().parent / "assets" / "shtucodeproxy.ico"
+    icon_path = resource_path("assets", "shtucodeproxy.ico")
     if icon_path.exists():
         return QIcon(str(icon_path))
     pixmap = QPixmap(256, 256)
@@ -427,7 +442,7 @@ def build_app_icon() -> QIcon:
 class IosProxyApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("SHTUCodeProxy 4.1.2")
+        self.setWindowTitle("SHTUCodeProxy 4.2.0")
         self.setWindowIcon(build_app_icon())
         self.resize(1420, 960)
         self.setMinimumSize(1220, 780)
@@ -480,7 +495,7 @@ class IosProxyApp(QMainWindow):
         nav_layout = QHBoxLayout(nav)
         nav_layout.setContentsMargins(24, 12, 24, 12)
         title_box = QVBoxLayout()
-        title = QLabel("SHTUCodeProxy 4.1.2")
+        title = QLabel("SHTUCodeProxy 4.2.0")
         title.setObjectName("WindowTitle")
         subtitle = QLabel("Claude Code and Codex local bridge")
         subtitle.setObjectName("WindowSubtitle")
@@ -1177,9 +1192,18 @@ class IosProxyApp(QMainWindow):
 
 
 def run() -> int:
+    set_windows_app_id()
     app = QApplication(sys.argv)
+    app.setApplicationName("SHTUCodeProxy")
+    app.setApplicationDisplayName("SHTUCodeProxy")
+    app.setOrganizationName("SHTU")
+    if hasattr(app, "setDesktopFileName"):
+        app.setDesktopFileName("shtucodeproxy")
+    app_icon = build_app_icon()
+    app.setWindowIcon(app_icon)
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
     window = IosProxyApp()
+    window.setWindowIcon(app_icon)
     window.show()
     return app.exec_()
