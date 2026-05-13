@@ -1,0 +1,55 @@
+name: Build Linux Release Asset
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach assets to"
+        required: true
+        default: "v4.1.1"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system libraries for Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libglib2.0-0 \
+            libx11-6 \
+            libxcb1 \
+            libxext6 \
+            libxkbcommon-x11-0 \
+            libxrender1
+
+      - name: Install Python build dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Build Linux packages
+        run: bash ./build_unix.sh
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            release/SHTUCodeProxy-*-linux-*-python-launcher.tar.gz \
+            release/SHTUCodeProxy-*-linux-* \
+            --clobber
