@@ -150,6 +150,18 @@ QGroupBox#CompactGroup::title {
   background: #F2F2F7;
 }
 
+QFrame#AdvancedCard {
+  background: rgba(255, 255, 255, 184);
+  border: 1px solid rgba(255, 255, 255, 230);
+  border-radius: 14px;
+}
+
+QLabel#InlineSectionTitle {
+  color: #000000;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 QPushButton {
   min-height: 34px;
   padding: 7px 14px;
@@ -221,6 +233,31 @@ QPushButton#RunButton {
 QPushButton#RunButton:hover {
   background: #E8F2FF;
   border: 1px solid rgba(0, 122, 255, 130);
+}
+
+QFrame#AdvancedActions {
+  background: transparent;
+  border: none;
+}
+
+QPushButton#OptionalButton {
+  min-height: 38px;
+  min-width: 172px;
+  color: #003A70;
+  border: 1px solid rgba(0, 122, 255, 145);
+  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFFFFF, stop:1 #EDF6FF);
+}
+
+QPushButton#OptionalButton:hover {
+  color: #001D35;
+  background: #DCEBFF;
+  border: 1px solid rgba(0, 122, 255, 180);
+}
+
+QPushButton#OptionalButton:pressed {
+  background: #D1D1D6;
+  margin-top: 1px;
+  margin-bottom: -1px;
 }
 
 QLineEdit, QComboBox, QTextEdit, QListWidget, QTableWidget {
@@ -390,7 +427,7 @@ def build_app_icon() -> QIcon:
 class IosProxyApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("SHTUCodeProxy 4.1.1")
+        self.setWindowTitle("SHTUCodeProxy 4.1.2")
         self.setWindowIcon(build_app_icon())
         self.resize(1420, 960)
         self.setMinimumSize(1220, 780)
@@ -443,7 +480,7 @@ class IosProxyApp(QMainWindow):
         nav_layout = QHBoxLayout(nav)
         nav_layout.setContentsMargins(24, 12, 24, 12)
         title_box = QVBoxLayout()
-        title = QLabel("SHTUCodeProxy 4.1.1")
+        title = QLabel("SHTUCodeProxy 4.1.2")
         title.setObjectName("WindowTitle")
         subtitle = QLabel("Claude Code and Codex local bridge")
         subtitle.setObjectName("WindowSubtitle")
@@ -638,22 +675,36 @@ class IosProxyApp(QMainWindow):
         bottom.addWidget(self.button("Stop Proxy", self.stop_proxy))
         main.addLayout(bottom)
 
-        advanced = self.group_card("Advanced / Optional", compact=True)
-        advanced_layout = QHBoxLayout(advanced)
-        advanced_layout.setContentsMargins(16, 18, 16, 12)
-        advanced_layout.setSpacing(10)
+        advanced = QFrame()
+        advanced.setObjectName("AdvancedCard")
+        self.add_shadow(advanced)
+        advanced_layout = QVBoxLayout(advanced)
+        advanced_layout.setContentsMargins(16, 10, 16, 14)
+        advanced_layout.setSpacing(0)
+        advanced_title = QLabel("Advanced / Optional")
+        advanced_title.setObjectName("InlineSectionTitle")
+        advanced_layout.addWidget(advanced_title)
+        advanced_body = QHBoxLayout()
+        advanced_body.setContentsMargins(0, 0, 0, 0)
+        advanced_body.setSpacing(16)
         advanced_hint = QLabel("Optional: install a manual PowerShell launcher or copy env vars. Most users do not need these.")
         advanced_hint.setObjectName("SectionHint")
+        advanced_hint.setWordWrap(True)
         advanced_hint.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         advanced_button_frame = QFrame()
+        advanced_button_frame.setObjectName("AdvancedActions")
+        advanced_button_frame.setMinimumSize(368, 42)
+        advanced_button_frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         advanced_button_layout = QHBoxLayout(advanced_button_frame)
         advanced_button_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_button_layout.setSpacing(10)
-        advanced_button_layout.addWidget(self.button("Copy Claude Config", self.copy_claude_config, kind="neutral"))
-        advanced_button_layout.addWidget(self.button("Install Launch Script", self.install_launch_script, kind="neutral"))
-        advanced_layout.addWidget(advanced_hint, 1, alignment=Qt.AlignVCenter)
-        advanced_layout.addWidget(advanced_button_frame, 0, alignment=Qt.AlignRight | Qt.AlignVCenter)
-        advanced.setMaximumHeight(86)
+        advanced_button_layout.setSpacing(12)
+        advanced_button_layout.addWidget(self.button("Copy Claude Config", self.copy_claude_config, kind="optional"))
+        advanced_button_layout.addWidget(self.button("Install Launch Script", self.install_launch_script, kind="optional"))
+        advanced_body.addWidget(advanced_hint, 1, alignment=Qt.AlignVCenter)
+        advanced_body.addWidget(advanced_button_frame, 0, alignment=Qt.AlignRight | Qt.AlignTop)
+        advanced_layout.addLayout(advanced_body)
+        advanced.setMinimumHeight(96)
+        advanced.setMaximumHeight(104)
         main.addWidget(advanced)
 
         logs = self.group_card("Logs")
@@ -677,6 +728,8 @@ class IosProxyApp(QMainWindow):
             button.setObjectName("SecondaryButton")
         elif kind == "run":
             button.setObjectName("RunButton")
+        elif kind == "optional":
+            button.setObjectName("OptionalButton")
         button.clicked.connect(slot)
         return button
 
@@ -912,18 +965,18 @@ class IosProxyApp(QMainWindow):
         try:
             self.server = ThreadingHTTPServer((self.config_data.host, self.config_data.port), proxy.ProxyHandler)
         except OSError as exc:
-            if self.config_data.host in ("127.0.0.1", "localhost"):
+            if cli.restart_existing_listener(self.config_data.host, self.config_data.port):
                 try:
-                    with socket.create_connection((self.config_data.host, self.config_data.port), timeout=0.5):
-                        self.append_log(f"Port {self.config_data.port} is already listening; reusing external proxy.")
-                        self.status_label.setText(f"Status: External proxy on http://{self.config_data.host}:{self.config_data.port}")
-                        self.refresh_connection_status()
-                        return
-                except OSError:
-                    pass
-            self.server = None
-            self.error("Start failed", str(exc))
-            return
+                    self.server = ThreadingHTTPServer((self.config_data.host, self.config_data.port), proxy.ProxyHandler)
+                    self.append_log(f"Restarted existing listener on port {self.config_data.port}")
+                except OSError as retry_exc:
+                    self.server = None
+                    self.error("Start failed", str(retry_exc))
+                    return
+            else:
+                self.server = None
+                self.error("Start failed", str(exc))
+                return
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
         self.status_label.setText(f"Status: Running on http://{self.config_data.host}:{self.config_data.port}")
