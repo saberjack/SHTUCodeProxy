@@ -412,6 +412,108 @@ This means MCP tool definitions and `function_call_output` history are preserved
 
 Codex skills are also client-side. As long as Codex turns a skill into prompt context, MCP tools, or Responses tool definitions, SHTUCodeProxy preserves that context and tool flow through the same `/v1/responses` path.
 
+## Generic API Clients
+
+SHTUCodeProxy can also be used by ordinary API clients, not only Claude Code or Codex. Start the proxy first, then point your client at the local proxy instead of the upstream GenAI endpoint.
+
+Recommended local base URL:
+
+```text
+http://127.0.0.1:8082/v1
+```
+
+Supported local endpoints:
+
+| Client style | Endpoint | Notes |
+| --- | --- | --- |
+| OpenAI Responses-style clients | `POST /v1/responses` | Recommended for generic API usage. |
+| Anthropic Messages-style clients | `POST /v1/messages` | Useful for Claude-compatible request bodies. |
+
+The local `Authorization` or `x-api-key` value is only a client-compatibility token. The real upstream API keys are read from SHTUCodeProxy's local model configuration.
+
+### OpenAI Responses-style request
+
+Use this for new generic integrations where you control the request body.
+
+```bash
+curl -X POST http://127.0.0.1:8082/v1/responses \
+  -H 'Authorization: Bearer local-proxy' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "glm-chat",
+    "input": [
+      {"role": "user", "content": "Reply with one short sentence about SHTUCodeProxy."}
+    ],
+    "temperature": 0,
+    "stream": false
+  }'
+```
+
+Streaming is also supported:
+
+```json
+{
+  "model": "glm-chat",
+  "input": [{"role": "user", "content": "Give me three concise bullet points."}],
+  "stream": true
+}
+```
+
+OpenAI Python SDK example:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="local-proxy",
+    base_url="http://127.0.0.1:8082/v1",
+)
+
+response = client.responses.create(
+    model="glm-chat",
+    input="Reply with one short sentence about SHTUCodeProxy.",
+)
+
+print(response.output_text)
+```
+
+### Anthropic Messages-style request
+
+Use this when your generic client already sends Anthropic-compatible Messages requests.
+
+```bash
+curl -X POST http://127.0.0.1:8082/v1/messages \
+  -H 'x-api-key: local-proxy' \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "glm-chat",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "Reply with one short sentence about SHTUCodeProxy."}
+    ],
+    "stream": false
+  }'
+```
+
+### Model names
+
+The `model` value must match a `Model ID` configured in SHTUCodeProxy, for example:
+
+```text
+glm-chat
+deepseek-chat
+qwen-instruct
+```
+
+For each request, the proxy looks up that model ID and forwards using the configured upstream Base URL, API Key, Upstream Model, and API Format (`responses` or `chat_completions`).
+
+### Important limitations
+
+- The local proxy currently exposes `/v1/responses` and `/v1/messages` for client requests.
+- Do not point generic clients at `http://127.0.0.1:8082/v1/chat/completions`; SHTUCodeProxy converts to upstream Chat Completions internally when a model route is configured as `chat_completions`, but it does not expose a local Chat Completions endpoint.
+- Make sure SHTUCodeProxy is running and the GUI shows the configured port is listening before sending generic API requests.
+
 ## Multiple Models
 
 You can add multiple model routes.
