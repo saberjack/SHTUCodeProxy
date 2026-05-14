@@ -12,7 +12,7 @@ This tool was created by **sunyb, ShanghaiTech University Library and Informatio
 > 
 <img width="1536" height="1024" alt="myImage (2)" src="https://github.com/user-attachments/assets/97a87f8a-a5ee-40fd-937c-d721abf662a1" />
 
-<img width="1422" height="967" alt="image" src="https://github.com/user-attachments/assets/30f6f6be-c8dc-4608-90a0-b94c7da65afb" />
+<img width="1422" height="992" alt="image" src="https://github.com/user-attachments/assets/41a9add0-c71b-4670-8346-549053f8bd2a" />
 
 <img width="1369" height="718" alt="image" src="https://github.com/user-attachments/assets/7aa38261-e18e-4e3e-b25a-2e7eb1b53986" />
 
