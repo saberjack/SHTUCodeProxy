@@ -15,13 +15,13 @@ This tool was created by **sunyb, ShanghaiTech University Library and Informatio
 <img width="1422" height="992" alt="image" src="https://github.com/user-attachments/assets/41a9add0-c71b-4670-8346-549053f8bd2a" />
 
 <img width="1369" height="718" alt="image" src="https://github.com/user-attachments/assets/7aa38261-e18e-4e3e-b25a-2e7eb1b53986" />
-
+Claude Cli
 <img width="1195" height="449" alt="image" src="https://github.com/user-attachments/assets/7f9ffe47-b5c1-4a66-ab05-1b6c747335c8" />
 
 <img width="2456" height="1620" alt="5cf20b87c9f360383d6b1c8d2fa02b48" src="https://github.com/user-attachments/assets/602ffb99-90ca-44b0-b302-911641c7dc7e" />
-
+CodeX Desktop
 <img width="946" height="764" alt="image" src="https://github.com/user-attachments/assets/421e1bba-9d29-4530-8178-2c299fa9d575" />
-
+Claud Desktop
 <img width="1200" height="800" alt="image" src="https://github.com/user-attachments/assets/61440724-7080-4c1e-b43c-d4021eda6abe" />
 
 
