@@ -10,9 +10,12 @@ This tool was created by **sunyb, ShanghaiTech University Library and Informatio
 
 > Note: SHTUCodeProxy is a local proxy tool created by sunyb for ShanghaiTech campus GenAI API access from Claude Code.
 
-<img width="1259" height="914" alt="image" src="https://github.com/user-attachments/assets/059f2446-43c0-4984-980a-7f50e38ee6cb" />
-<img width="1258" height="257" alt="image" src="https://github.com/user-attachments/assets/48f637fc-042d-4738-8ebe-2949a12fe067" />
+<img width="1422" height="967" alt="image" src="https://github.com/user-attachments/assets/30f6f6be-c8dc-4608-90a0-b94c7da65afb" />
+
+<img width="1369" height="718" alt="image" src="https://github.com/user-attachments/assets/7aa38261-e18e-4e3e-b25a-2e7eb1b53986" />
+
 <img width="1195" height="449" alt="image" src="https://github.com/user-attachments/assets/7f9ffe47-b5c1-4a66-ab05-1b6c747335c8" />
+
 <img width="2456" height="1620" alt="5cf20b87c9f360383d6b1c8d2fa02b48" src="https://github.com/user-attachments/assets/602ffb99-90ca-44b0-b302-911641c7dc7e" />
 
 
