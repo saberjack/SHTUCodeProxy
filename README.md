@@ -8,7 +8,9 @@ SHTUCodeProxy is a cross-platform local proxy for connecting **Claude Code**, **
 
 This tool was created by **sunyb, ShanghaiTech University Library and Information Center** for internal campus use. It helps users access Claude Code through the university GenAI API by translating Claude Code's Anthropic Messages API traffic into upstream requests and converting streaming responses back into Claude Code-compatible Server-Sent Events. v4.1.1 also exposes an OpenAI Responses-compatible `/v1/responses` endpoint for Codex clients.
 
-> Note: SHTUCodeProxy is a local proxy tool created by sunyb for ShanghaiTech campus GenAI API access from Claude Code.
+> Note: SHTUCodeProxy is a local proxy tool created by sunyb for ShanghaiTech campus GenAI API access from Claude Code  ,CodeX and any other.
+> 
+<img width="1536" height="1024" alt="myImage (2)" src="https://github.com/user-attachments/assets/97a87f8a-a5ee-40fd-937c-d721abf662a1" />
 
 <img width="1422" height="967" alt="image" src="https://github.com/user-attachments/assets/30f6f6be-c8dc-4608-90a0-b94c7da65afb" />
 
