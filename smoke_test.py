@@ -732,6 +732,45 @@ def exercise_headless_cli_model_config(tmpdir: Path) -> None:
             os.environ["CLAUDE_RESPONSES_PROXY_CONFIG"] = old_env_config
 
 
+def exercise_headless_apply_config(tmpdir: Path) -> None:
+    old_env_config = os.environ.get("CLAUDE_RESPONSES_PROXY_CONFIG")
+    os.environ["CLAUDE_RESPONSES_PROXY_CONFIG"] = str(tmpdir / "apply_config" / "config.json")
+    try:
+        source = tmpdir / "headless-config.json"
+        source.write_text(json.dumps({
+            "host": "127.0.0.1",
+            "port": 19084,
+            "default_model_id": "file-smoke",
+            "codex_model_id": "file-smoke",
+            "models": [{
+                "name": "File Smoke",
+                "model_id": "file-smoke",
+                "base_url": "https://example.invalid/v1/response",
+                "api_key": "file-key",
+                "upstream_model": "file-upstream",
+                "api_format": "responses",
+            }],
+        }), encoding="utf-8")
+        assert_true(cli.main(["apply-config", str(source)]) == 0, "headless apply-config should load a JSON config file")
+        config = load_config(Path(os.environ["CLAUDE_RESPONSES_PROXY_CONFIG"]))
+        assert_true(config.default_model_id == "file-smoke", "apply-config should persist default model")
+        assert_true(config.codex_model_id == "file-smoke", "apply-config should persist Codex model")
+        assert_true(config.find_model("file-smoke").api_key == "file-key", "apply-config should persist model API key")
+        bad = tmpdir / "headless-config-missing-key.json"
+        bad.write_text(source.read_text(encoding="utf-8").replace("file-key", ""), encoding="utf-8")
+        try:
+            cli.apply_config_file(bad)
+        except ValueError as exc:
+            assert_true("Missing api_key" in str(exc), "apply-config should reject missing API keys loudly")
+        else:
+            raise AssertionError("apply-config accepted a model without api_key")
+    finally:
+        if old_env_config is None:
+            os.environ.pop("CLAUDE_RESPONSES_PROXY_CONFIG", None)
+        else:
+            os.environ["CLAUDE_RESPONSES_PROXY_CONFIG"] = old_env_config
+
+
 def exercise_multi_tool_call_delta() -> None:
     kind, parsed = extract_text_delta(None, json.dumps({
         "choices": [{
@@ -927,6 +966,7 @@ def main() -> int:
         exercise_codex_config_writer(tmpdir)
         exercise_backup_restore(tmpdir)
         exercise_headless_cli_model_config(tmpdir)
+        exercise_headless_apply_config(tmpdir)
         app_cli = subprocess.run([sys.executable, "app.py", "status"], capture_output=True, text=True, timeout=10)
         assert_true(app_cli.returncode == 0 and "Proxy URL:" in app_cli.stdout, "app.py should pass CLI arguments through without requiring a GUI")
         exercise_multi_tool_call_delta()

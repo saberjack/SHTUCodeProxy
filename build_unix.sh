@@ -83,6 +83,7 @@ if [[ "$ONE_FILE_ONLY" != "1" ]]; then
     --add-data "config_store.py:." \
     --add-data "safe_io.py:." \
     --add-data "VERSION:." \
+    --add-data "headless-config.example.json:." \
     app.py
 
   rm -rf "build/$PACKAGE_ROOT"
@@ -90,6 +91,7 @@ if [[ "$ONE_FILE_ONLY" != "1" ]]; then
   cp -R "dist/$FOLDER_NAME" "build/$PACKAGE_ROOT/$FOLDER_NAME"
   cp linux_launcher.py "build/$PACKAGE_ROOT/run_shtucodeproxy.py"
   cp "assets/shtucodeproxy.ico" "build/$PACKAGE_ROOT/shtucodeproxy.ico"
+  cp headless-config.example.json "build/$PACKAGE_ROOT/headless-config.example.json"
   cat > "build/$PACKAGE_ROOT/shtucodeproxy.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -110,6 +112,7 @@ Usage:
 
 Headless CLI examples:
 - python3 run_shtucodeproxy.py configure-model --model-id glm-chat --api-key YOUR_KEY --upstream-model glm-chat --api-format chat_completions --default --codex
+- cp headless-config.example.json config.json; edit config.json; python3 run_shtucodeproxy.py apply-config config.json --write-claude --write-codex --start
 - python3 run_shtucodeproxy.py start
 - python3 run_shtucodeproxy.py status
 - python3 run_shtucodeproxy.py stop
@@ -139,6 +142,7 @@ if [[ "$ONE_DIR_ONLY" != "1" ]]; then
     --add-data "config_store.py:." \
     --add-data "safe_io.py:." \
     --add-data "VERSION:." \
+    --add-data "headless-config.example.json:." \
     cli_app.py
 
   cp "dist/$CLI_NAME" "release/$CLI_NAME"
@@ -159,6 +163,7 @@ if [[ "$ONE_DIR_ONLY" != "1" ]]; then
     --add-data "config_store.py:." \
     --add-data "safe_io.py:." \
     --add-data "VERSION:." \
+    --add-data "headless-config.example.json:." \
     app.py
 
   cp "dist/$APP_NAME" "release/$APP_NAME"

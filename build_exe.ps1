@@ -43,6 +43,7 @@ if (-not $OneFileOnly) {
     --add-data "config_store.py;." `
     --add-data "safe_io.py;." `
     --add-data "VERSION;." `
+    --add-data "headless-config.example.json;." `
     app.py
 
   Compress-Archive `
@@ -71,6 +72,7 @@ if (-not $OneDirOnly) {
     --add-data "config_store.py;." `
     --add-data "safe_io.py;." `
     --add-data "VERSION;." `
+    --add-data "headless-config.example.json;." `
     app.py
 
   Copy-Item `

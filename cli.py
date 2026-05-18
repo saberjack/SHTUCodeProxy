@@ -450,6 +450,40 @@ def configure_model(args: argparse.Namespace) -> AppConfig:
     return config
 
 
+def load_config_file(path: Path) -> AppConfig:
+    payload = json.loads(path.expanduser().read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("Config file must contain a JSON object")
+    config = AppConfig.from_dict(payload)
+    if not config.models:
+        raise ValueError("Config file must contain at least one model")
+    missing_keys = [model.model_id for model in config.models if not model.api_key]
+    if missing_keys:
+        raise ValueError(f"Missing api_key for model(s): {', '.join(missing_keys)}")
+    model_ids = {model.model_id for model in config.models}
+    if config.default_model_id not in model_ids:
+        raise ValueError(f"default_model_id is not in models: {config.default_model_id}")
+    if config.codex_model_id not in model_ids:
+        raise ValueError(f"codex_model_id is not in models: {config.codex_model_id}")
+    return config
+
+
+def apply_config_file(path: Path, *, write_claude: bool = False, write_codex: bool = False, start: bool = False) -> AppConfig:
+    config = load_config_file(path)
+    save_config(config)
+    print(f"Applied config file: {path.expanduser()}")
+    print(f"Saved app config: {config_path()}")
+    if write_claude:
+        print(f"Wrote Claude settings: {write_claude_settings(config)}")
+    if write_codex:
+        config_file, auth_file = write_codex_files(config)
+        print(f"Wrote Codex config: {config_file}")
+        print(f"Wrote Codex auth: {auth_file}")
+    if start:
+        start_background(config)
+    return config
+
+
 def use_model(model_id: str, *, codex: bool = False, claude: bool = False) -> AppConfig:
     config = load_config()
     if not any(model.model_id == model_id for model in config.models):
@@ -586,6 +620,11 @@ def main(argv: list[str] | None = None) -> int:
     configure_parser.add_argument("--port", type=int, help="Proxy listen port, default keeps current config")
     configure_parser.add_argument("--default", action="store_true", help="Use this model for Claude model routing")
     configure_parser.add_argument("--codex", action="store_true", help="Use this model for Codex config")
+    apply_parser = subparsers.add_parser("apply-config", help="Load model/client settings from one JSON file")
+    apply_parser.add_argument("file", help="Path to SHTUCodeProxy JSON config file")
+    apply_parser.add_argument("--write-claude", action="store_true", help="Write Claude Code settings after loading the file")
+    apply_parser.add_argument("--write-codex", action="store_true", help="Write Codex config.toml and auth.json after loading the file")
+    apply_parser.add_argument("--start", action="store_true", help="Start the proxy in the background after applying the file")
     use_parser = subparsers.add_parser("use-model", help="Switch Claude and/or Codex to an existing model id")
     use_parser.add_argument("model_id")
     use_parser.add_argument("--codex", action="store_true", help="Switch Codex only unless --claude is also set")
@@ -612,6 +651,10 @@ def main(argv: list[str] | None = None) -> int:
         config = configure_model(args)
         print(f"Configured model: {args.model_id}")
         print(f"Config path: {config_path()}")
+    elif args.command == "apply-config":
+        config = apply_config_file(Path(args.file), write_claude=args.write_claude, write_codex=args.write_codex, start=args.start)
+        print(f"Default model: {config.default_model_id}")
+        print(f"Codex model: {config.codex_model_id}")
     elif args.command == "use-model":
         config = use_model(args.model_id, codex=args.codex, claude=args.claude)
         print(f"Selected model: {args.model_id}")

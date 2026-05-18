@@ -1,0 +1,25 @@
+{
+  "host": "127.0.0.1",
+  "port": 8082,
+  "default_model_id": "glm-chat",
+  "codex_model_id": "glm-chat",
+  "codex_sandbox_mode": "workspace-write",
+  "model_env": {
+    "ANTHROPIC_MODEL": "glm-chat",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-chat",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-chat",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-chat",
+    "ANTHROPIC_REASONING_MODEL": "glm-chat"
+  },
+  "timeout": 300,
+  "models": [
+    {
+      "name": "GLM Chat",
+      "model_id": "glm-chat",
+      "base_url": "https://genaiapi.shanghaitech.edu.cn/api/v1/start",
+      "api_key": "PUT_YOUR_API_KEY_HERE",
+      "upstream_model": "glm-chat",
+      "api_format": "chat_completions"
+    }
+  ]
+}

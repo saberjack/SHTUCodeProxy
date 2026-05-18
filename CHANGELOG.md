@@ -1,5 +1,14 @@
 ﻿# Changelog
 
+## v4.2.8 - 2026-05-18
+
+Headless config-file workflow.
+
+### Added
+
+- Added `apply-config` for loading headless JSON config files and optionally writing client configs plus starting the proxy.
+- Added `headless-config.example.json` for Linux server users who prefer editing one file instead of typing long commands.
+
 ## v4.2.7 - 2026-05-18
 
 Linux shell and headless CLI fix.
