@@ -1,5 +1,14 @@
 ﻿# Changelog
 
+## v4.2.10 - 2026-05-18
+
+Headless background start reliability fix.
+
+### Fixed
+
+- Fixed Linux packaged CLI background startup by resetting the PyInstaller onefile child environment before re-execing `serve`.
+- `start` now waits for the configured port to actually listen before reporting success, and prints recent proxy logs if startup fails.
+
 ## v4.2.9 - 2026-05-18
 
 Expanded headless model template.

@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Dict
@@ -415,6 +416,23 @@ def read_proxy_pid() -> int | None:
         return None
 
 
+def background_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "serve"]
+    return [sys.executable, str(Path(__file__).resolve()), "serve"]
+
+
+def recent_log_tail(lines: int = 20) -> str:
+    target = log_path()
+    if not target.exists():
+        return ""
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    return "\n".join(content[-lines:])
+
+
 def configure_model(args: argparse.Namespace) -> AppConfig:
     config = load_config()
     model_id = args.model_id.strip()
@@ -512,10 +530,14 @@ def start_background(config: AppConfig) -> None:
     app_dir().mkdir(parents=True, exist_ok=True)
     stdout = log_path().open("ab")
     stderr = subprocess.STDOUT
-    command = [sys.executable, "serve"] if getattr(sys, "frozen", False) else [sys.executable, str(Path(__file__).resolve()), "serve"]
+    command = background_command()
+    env = os.environ.copy()
+    if getattr(sys, "frozen", False):
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     process = subprocess.Popen(
         command,
         cwd=str(Path(__file__).resolve().parent),
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=stdout,
         stderr=stderr,
@@ -523,9 +545,24 @@ def start_background(config: AppConfig) -> None:
     )
     stdout.close()
     pid_path().write_text(str(process.pid), encoding="utf-8")
-    print(f"Started proxy in background: PID {process.pid}")
-    print(f"Proxy URL: http://{config.host}:{config.port}")
-    print(f"Log file: {log_path()}")
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if is_port_listening(config.host, config.port):
+            print(f"Started proxy in background: PID {process.pid}")
+            print(f"Proxy URL: http://{config.host}:{config.port}")
+            print(f"Log file: {log_path()}")
+            return
+        if process.poll() is not None:
+            break
+        time.sleep(0.2)
+    tail = recent_log_tail()
+    pid_path().unlink(missing_ok=True)
+    print(f"Proxy failed to listen on http://{config.host}:{config.port}", file=sys.stderr)
+    print(f"Log file: {log_path()}", file=sys.stderr)
+    if tail:
+        print("Recent proxy log:", file=sys.stderr)
+        print(tail, file=sys.stderr)
+    raise SystemExit(1)
 
 
 def stop_background() -> None:

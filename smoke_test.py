@@ -784,6 +784,14 @@ def exercise_headless_apply_config(tmpdir: Path) -> None:
             os.environ["CLAUDE_RESPONSES_PROXY_CONFIG"] = old_env_config
 
 
+def exercise_background_start_regressions() -> None:
+    with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", "/tmp/shtucodeproxyctl"):
+        assert_true(cli.background_command() == ["/tmp/shtucodeproxyctl", "serve"], "frozen background start should re-exec the bundled executable")
+    with patch.object(sys, "frozen", False, create=True):
+        command = cli.background_command()
+        assert_true(command[-1] == "serve" and command[0] == sys.executable, "source background start should run cli.py serve")
+
+
 def exercise_multi_tool_call_delta() -> None:
     kind, parsed = extract_text_delta(None, json.dumps({
         "choices": [{
@@ -980,6 +988,7 @@ def main() -> int:
         exercise_backup_restore(tmpdir)
         exercise_headless_cli_model_config(tmpdir)
         exercise_headless_apply_config(tmpdir)
+        exercise_background_start_regressions()
         app_cli = subprocess.run([sys.executable, "app.py", "status"], capture_output=True, text=True, timeout=10)
         assert_true(app_cli.returncode == 0 and "Proxy URL:" in app_cli.stdout, "app.py should pass CLI arguments through without requiring a GUI")
         exercise_multi_tool_call_delta()
