@@ -469,6 +469,21 @@ def exercise_codex_responses_passthrough() -> None:
     assert_true(chat_payload["tools"][0]["function"]["name"] == "shell", "codex response tool should convert to chat tool")
     assert_true(chat_payload["tools"][1]["function"]["name"] == "read_file", "codex should preserve multiple tools")
 
+    system_payload = responses_request_to_chat_completions({
+        "instructions": "primary system",
+        "input": [
+            {"role": "user", "content": "hello"},
+            {"role": "system", "content": "late system"},
+            {"role": "developer", "content": "developer note"},
+        ],
+    }, "fallback", "chat-upstream")
+    assert_true(system_payload["messages"][0]["role"] == "system", "codex chat route should keep system message first")
+    assert_true(
+        sum(1 for message in system_payload["messages"] if message.get("role") == "system") == 1,
+        "codex chat route should merge system/developer messages for qwen-compatible upstreams",
+    )
+    assert_true(system_payload["messages"][1]["role"] == "user", "codex chat route should keep user messages after merged system")
+
 
 def exercise_default_stream_config() -> None:
     anthropic_body = {"model": "smoke-model", "messages": [{"role": "user", "content": "hello"}]}

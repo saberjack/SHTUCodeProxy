@@ -1,4 +1,22 @@
-﻿# Changelog
+# Changelog
+
+## v4.3.1 - 2026-05-19
+
+Codex qwen-instruct empty-response hotfix.
+
+### Fixed
+
+- Fixed qwen-instruct on Codex /v1/responses streaming where qwen's long reasoning stream could leave Codex with last_agent_message = null and no assistant output.
+- Fixed Codex qwen-instruct requests that include later system/developer messages by merging all system-level instructions into the first Chat Completions system message.
+- Kept GLM and DeepSeek on their original upstream streaming path; the bridge is scoped to qwen-style Chat Completions routes only.
+
+### Verified
+
+- Verified qwen-instruct Codex-style 你是谁 now emits a valid Responses assistant message.
+- Verified qwen-instruct with real Codex CLI no longer fails with "System message must be at the beginning".
+- Re-tested GLM, DeepSeek, and qwen-instruct streaming tool-call paths.
+- Re-tested qwen-instruct Claude Code /v1/messages streaming path.
+
 
 ## v4.3.0 - 2026-05-19
 

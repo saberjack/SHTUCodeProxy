@@ -966,12 +966,13 @@ def responses_tool_choice_to_chat(tool_choice: Any) -> Any:
 
 
 def responses_request_to_chat_completions(body: Dict[str, Any], fallback_model: str, upstream_model: Optional[str] = None, default_stream: bool = True) -> Dict[str, Any]:
+    system_messages: List[Dict[str, Any]] = []
     messages: List[Dict[str, Any]] = []
     instructions = body.get("instructions")
     if isinstance(instructions, str) and instructions.strip():
-        messages.append({"role": "system", "content": instructions})
+        system_messages.append({"role": "system", "content": instructions})
     if body.get("tools"):
-        messages.append({"role": "system", "content": "When tools are needed, call the provided tools by their exact names through the native tool_calls API. Do not invent tool names such as shell unless that exact tool is provided. Do not write XML, pseudo-code, <function>, <Invoke>, or markdown tool-call text. If a file path is requested and a command execution tool is available, call that provided command tool to read it instead of guessing."})
+        system_messages.append({"role": "system", "content": "When tools are needed, call the provided tools by their exact names through the native tool_calls API. Do not invent tool names such as shell unless that exact tool is provided. Do not write XML, pseudo-code, <function>, <Invoke>, or markdown tool-call text. If a file path is requested and a command execution tool is available, call that provided command tool to read it instead of guessing."})
 
     input_items = body.get("input")
     if isinstance(input_items, str):
@@ -1004,13 +1005,24 @@ def responses_request_to_chat_completions(body: Dict[str, Any], fallback_model: 
                     messages.append({"role": "user", "content": visible_text})
                 continue
             role = item.get("role") or ("assistant" if item_type == "message" else "user")
-            messages.append({"role": role, "content": responses_content_to_chat_content(item.get("content"))})
+            message_role = "system" if role == "developer" else role
+            message = {"role": message_role, "content": responses_content_to_chat_content(item.get("content"))}
+            if message["role"] == "system":
+                message["content"] = responses_content_to_text(item.get("content"))
+                system_messages.append(message)
+            else:
+                messages.append(message)
     else:
         messages.append({"role": "user", "content": ""})
 
+    final_messages = messages
+    if system_messages:
+        system_content = "\n\n".join(str(item.get("content") or "") for item in system_messages if item.get("content"))
+        final_messages = [{"role": "system", "content": system_content}] + messages
+
     payload: Dict[str, Any] = {
         "model": upstream_model or os.getenv("UPSTREAM_MODEL") or body.get("model") or fallback_model,
-        "messages": messages,
+        "messages": final_messages,
         "stream": request_stream_enabled(body, default_stream),
     }
     if isinstance(body.get("max_output_tokens"), int):
@@ -1485,6 +1497,22 @@ def responses_completed_payload(request_id: str, model: str, output: List[Dict[s
     }
 
 
+def response_text_from_upstream_json(payload: Dict[str, Any]) -> str:
+    output = payload.get("output")
+    if isinstance(output, list):
+        text = responses_json_output_text(output)
+        if text:
+            return text
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+    return ""
+
+
 def responses_error_payload(message: str, error_type: str = "api_error") -> Dict[str, Any]:
     return {"error": {"message": message, "type": error_type}}
 
@@ -1668,6 +1696,53 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         emit("response.created", {"response": {"id": request_id, "object": "response", "created_at": int(time.time()), "status": "in_progress", "model": model_config.model_id, "output": []}})
         emit("response.in_progress", {"response": {"id": request_id, "status": "in_progress"}})
+        qwen_stream_bridge = "qwen" in f"{model_config.model_id} {model_config.upstream_model}".lower()
+        if model_config.api_format == "chat_completions" and qwen_stream_bridge:
+            non_stream_payload = dict(upstream_payload)
+            non_stream_payload["stream"] = False
+            try:
+                with open_upstream(non_stream_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
+                    raw_payload = response.read().decode("utf-8", errors="replace")
+                converted = chat_completion_json_to_responses(
+                    json.loads(raw_payload),
+                    model_config.model_id,
+                    estimate_value_tokens(body.get("input")),
+                    non_stream_payload.get("tools") if isinstance(non_stream_payload.get("tools"), list) else None,
+                )
+                output_text = responses_json_output_text(converted.get("output", []))
+                for output_index, item in enumerate(converted.get("output", [])):
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") == "message":
+                        content = item.get("content") if isinstance(item.get("content"), list) else []
+                        emit("response.output_item.added", {"output_index": output_index, "item": dict(item, status="in_progress", content=[])})
+                        for content_index, part in enumerate(content):
+                            emit("response.content_part.added", {"item_id": item.get("id"), "output_index": output_index, "content_index": content_index, "part": {"type": part.get("type", "output_text"), "text": ""}})
+                            if part.get("type") in ("output_text", "text") and part.get("text"):
+                                emit("response.output_text.delta", {"item_id": item.get("id"), "output_index": output_index, "content_index": content_index, "delta": part.get("text", "")})
+                                emit("response.output_text.done", {"item_id": item.get("id"), "output_index": output_index, "content_index": content_index, "text": part.get("text", "")})
+                            emit("response.content_part.done", {"item_id": item.get("id"), "output_index": output_index, "content_index": content_index, "part": part})
+                        emit("response.output_item.done", {"output_index": output_index, "item": item})
+                    elif item.get("type") == "function_call":
+                        emit("response.output_item.added", {"output_index": output_index, "item": dict(item, status="in_progress")})
+                        emit("response.function_call_arguments.delta", {"item_id": item.get("id"), "output_index": output_index, "delta": item.get("arguments", "{}")})
+                        emit("response.function_call_arguments.done", {"item_id": item.get("id"), "output_index": output_index, "arguments": item.get("arguments", "{}")})
+                        emit("response.output_item.done", {"output_index": output_index, "item": item})
+                emit("response.completed", {"response": converted})
+                write_data_sse(self, "[DONE]")
+                self.close_connection = True
+                return
+            except urllib.error.HTTPError as exc:
+                message = upstream_error_message(exc)
+                emit("response.failed", {"response": {"id": request_id, "status": "failed", "error": {"type": "api_error", "message": message}}})
+                write_data_sse(self, "[DONE]")
+                self.close_connection = True
+                return
+            except Exception as exc:
+                emit("response.failed", {"response": {"id": request_id, "status": "failed", "error": {"type": "api_error", "message": f"Upstream response error: {exc}"}}})
+                write_data_sse(self, "[DONE]")
+                self.close_connection = True
+                return
         try:
             with open_upstream(upstream_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
                 log(f"codex upstream connected model={model_config.model_id} format={model_config.api_format} status={getattr(response, 'status', 'unknown')}")
@@ -1706,6 +1781,30 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if pseudo_tool_calls:
             for pseudo_tool_call in pseudo_tool_calls:
                 merge_tool_call_payloads(tool_calls, pseudo_tool_call)
+        if not output_text and not tool_calls:
+            retry_payload = dict(upstream_payload)
+            retry_payload["stream"] = False
+            try:
+                with open_upstream(retry_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
+                    raw_payload = response.read().decode("utf-8", errors="replace")
+                fallback_payload = json.loads(raw_payload)
+                output_text = response_text_from_upstream_json(fallback_payload)
+                if not output_text and isinstance(fallback_payload.get("choices"), list):
+                    converted = chat_completion_json_to_responses(
+                        fallback_payload,
+                        model_config.model_id,
+                        estimate_value_tokens(body.get("input")),
+                        retry_payload.get("tools") if isinstance(retry_payload.get("tools"), list) else None,
+                    )
+                    output_text = responses_json_output_text(converted.get("output", []))
+                log(f"codex empty stream fallback model={model_config.model_id} chars={len(output_text)}")
+            except Exception as exc:
+                log(f"codex empty stream fallback failed model={model_config.model_id} error={exc}")
+        if not output_text and not tool_calls:
+            emit("response.failed", {"response": {"id": request_id, "status": "failed", "error": {"type": "api_error", "message": "Upstream completed without assistant text or tool calls"}}})
+            write_data_sse(self, "[DONE]")
+            self.close_connection = True
+            return
         output: List[Dict[str, Any]] = []
         if output_text:
             emit("response.output_item.added", {"output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
