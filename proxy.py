@@ -560,6 +560,129 @@ def estimate_anthropic_input_tokens(body: Dict[str, Any]) -> int:
     return max(1, total)
 
 
+MODALITY_PART_TYPES = {
+    "image": {"image", "input_image", "image_url"},
+    "audio": {"input_audio", "audio"},
+    "video": {"video", "input_video", "video_url"},
+}
+MULTIMODAL_PART_TYPES = set().union(*MODALITY_PART_TYPES.values())
+
+
+def content_modalities(content: Any) -> set[str]:
+    found: set[str] = set()
+    parts = [content] if isinstance(content, dict) else content if isinstance(content, list) else []
+    if not isinstance(parts, list):
+        return found
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        for modality, part_types in MODALITY_PART_TYPES.items():
+            if part_type in part_types:
+                found.add(modality)
+    return found
+
+
+def content_has_multimodal(content: Any) -> bool:
+    return bool(content_modalities(content))
+
+
+def unsupported_modalities(model_config: ModelConfig, modalities: set[str]) -> set[str]:
+    unsupported: set[str] = set()
+    if "image" in modalities and not model_config.supports_image:
+        unsupported.add("image")
+    if "audio" in modalities and not model_config.supports_audio:
+        unsupported.add("audio")
+    if "video" in modalities and not model_config.supports_video:
+        unsupported.add("video")
+    return unsupported
+
+
+def sanitized_content_for_model(content: Any, model_config: ModelConfig) -> Any:
+    if isinstance(content, list):
+        sanitized: List[Any] = []
+        for part in content:
+            if isinstance(part, dict) and unsupported_modalities(model_config, content_modalities(part)):
+                continue
+            sanitized.append(part)
+        return sanitized
+    if isinstance(content, dict) and unsupported_modalities(model_config, content_modalities(content)):
+        return ""
+    return content
+
+
+def sanitized_anthropic_body_for_model(body: Dict[str, Any], model_config: ModelConfig) -> Dict[str, Any]:
+    sanitized = dict(body)
+    messages: List[Any] = []
+    for message in body.get("messages", []):
+        if isinstance(message, dict) and unsupported_modalities(model_config, content_modalities(message.get("content"))):
+            sanitized_message = dict(message)
+            sanitized_message["content"] = sanitized_content_for_model(message.get("content"), model_config)
+            messages.append(sanitized_message)
+        else:
+            messages.append(message)
+    sanitized["messages"] = messages
+    return sanitized
+
+
+def sanitized_responses_body_for_model(body: Dict[str, Any], model_config: ModelConfig) -> Dict[str, Any]:
+    sanitized = dict(body)
+    input_items = body.get("input")
+    if isinstance(input_items, dict):
+        sanitized_item = dict(input_items)
+        if unsupported_modalities(model_config, content_modalities(sanitized_item)):
+            sanitized_item = {"role": sanitized_item.get("role", "user"), "content": sanitized_content_for_model(sanitized_item.get("content", ""), model_config)}
+        else:
+            sanitized_item["content"] = sanitized_content_for_model(sanitized_item.get("content"), model_config)
+        sanitized["input"] = sanitized_item
+    elif isinstance(input_items, list):
+        sanitized_items: List[Any] = []
+        for item in input_items:
+            if isinstance(item, dict):
+                sanitized_item = dict(item)
+                if unsupported_modalities(model_config, content_modalities(sanitized_item)):
+                    sanitized_item = {"role": sanitized_item.get("role", "user"), "content": sanitized_content_for_model(sanitized_item.get("content", ""), model_config)}
+                else:
+                    sanitized_item["content"] = sanitized_content_for_model(sanitized_item.get("content"), model_config)
+                sanitized_items.append(sanitized_item)
+            else:
+                sanitized_items.append(item)
+        sanitized["input"] = sanitized_items
+    return sanitized
+
+
+def anthropic_current_user_modalities(body: Dict[str, Any]) -> set[str]:
+    messages = body.get("messages", [])
+    if not isinstance(messages, list):
+        return set()
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        if message.get("role", "user") == "user":
+            return content_modalities(message.get("content"))
+    return set()
+
+
+def responses_current_user_modalities(body: Dict[str, Any]) -> set[str]:
+    input_items = body.get("input")
+    if isinstance(input_items, dict):
+        return content_modalities(input_items) | content_modalities(input_items.get("content"))
+    if isinstance(input_items, list):
+        for item in reversed(input_items):
+            if isinstance(item, dict) and (content_has_multimodal(item) or content_has_multimodal(item.get("content"))):
+                role = item.get("role") or ("assistant" if item.get("type") == "message" else "user")
+                return (content_modalities(item) | content_modalities(item.get("content"))) if role == "user" else set()
+            if isinstance(item, dict) and item.get("role") == "user":
+                return set()
+    return set()
+
+
+def unsupported_modalities_message(model_config: ModelConfig, modalities: set[str]) -> str:
+    labels = {"image": "图片识别", "audio": "音频输入", "video": "视频输入"}
+    names = "、".join(labels[item] for item in ("image", "audio", "video") if item in modalities)
+    return f"模型 {model_config.model_id} 当前配置为不支持{names}。请切换到支持该类型输入的模型，或在模型配置中确认并开启对应能力后重试。"
+
+
 def strip_thinking_markup(text: str) -> str:
     cleaned = re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"^\s*</think>\s*", "", cleaned, flags=re.IGNORECASE)
@@ -1517,6 +1640,31 @@ def responses_error_payload(message: str, error_type: str = "api_error") -> Dict
     return {"error": {"message": message, "type": error_type}}
 
 
+def anthropic_error_message_payload(model_config: ModelConfig, message: str, input_tokens: int = 0) -> Dict[str, Any]:
+    return {
+        "id": anthropic_message_id(),
+        "type": "message",
+        "role": "assistant",
+        "model": model_config.model_id,
+        "content": [{"type": "text", "text": message}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": input_tokens, "output_tokens": max(1, len(message) // 4)},
+    }
+
+
+def responses_unsupported_modalities_payload(model_config: ModelConfig, message: str, input_tokens: int = 0) -> Dict[str, Any]:
+    item_id = response_output_item_id()
+    output = [{
+        "id": item_id,
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": message}],
+    }]
+    return responses_completed_payload(response_id(), model_config.model_id, output, input_tokens, message)
+
+
 def responses_json_output_text(output: List[Dict[str, Any]]) -> str:
     text_parts: List[str] = []
     for item in output:
@@ -1618,11 +1766,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream_model = os.getenv("UPSTREAM_MODEL") or model_config.upstream_model
             auth_token = os.getenv("UPSTREAM_API_KEY") or model_config.api_key or os.getenv("ANTHROPIC_AUTH_TOKEN") or ""
             timeout = int(os.getenv("UPSTREAM_TIMEOUT", str(config.timeout)))
+            body_for_upstream = body
+            unsupported = unsupported_modalities(model_config, anthropic_current_user_modalities(body))
+            if unsupported:
+                message = unsupported_modalities_message(model_config, unsupported)
+                log(f"blocked unsupported modalities model={model_config.model_id} modalities={','.join(sorted(unsupported))} stream={stream}")
+                if stream:
+                    self.send_anthropic_text_stream(model_config, message)
+                else:
+                    send_json(self, 200, anthropic_error_message_payload(model_config, message, estimate_anthropic_input_tokens(body)))
+                return
+            body_for_upstream = sanitized_anthropic_body_for_model(body, model_config)
             if not auth_token:
                 send_json(self, 500, {"type": "error", "error": {"type": "authentication_error", "message": f"No API key configured for model {model_config.model_id}"}})
                 return
 
-            upstream_payload = anthropic_messages_to_upstream(body, model_config, fallback_model, upstream_model, config.default_stream)
+            upstream_payload = anthropic_messages_to_upstream(body_for_upstream, model_config, fallback_model, upstream_model, config.default_stream)
             log(
                 "request "
                 f"model={body.get('model')} route={model_config.model_id} "
@@ -1654,10 +1813,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream_model = os.getenv("UPSTREAM_MODEL") or model_config.upstream_model
             auth_token = os.getenv("UPSTREAM_API_KEY") or model_config.api_key or os.getenv("ANTHROPIC_AUTH_TOKEN") or ""
             timeout = int(os.getenv("UPSTREAM_TIMEOUT", str(config.timeout)))
+            body_for_upstream = body
+            unsupported = unsupported_modalities(model_config, responses_current_user_modalities(body))
+            if unsupported:
+                message = unsupported_modalities_message(model_config, unsupported)
+                log(f"blocked unsupported Responses modalities model={model_config.model_id} modalities={','.join(sorted(unsupported))} stream={stream}")
+                if stream:
+                    self.send_responses_text_stream(model_config, message, estimate_value_tokens(body.get("input")))
+                else:
+                    send_json(self, 200, responses_unsupported_modalities_payload(model_config, message, estimate_value_tokens(body.get("input"))))
+                return
+            body_for_upstream = sanitized_responses_body_for_model(body, model_config)
             if not auth_token:
                 send_json(self, 500, responses_error_payload(f"No API key configured for model {model_config.model_id}", "authentication_error"))
                 return
-            upstream_payload = responses_request_to_model_upstream(body, model_config, fallback_model, upstream_model, config.default_stream)
+            upstream_payload = responses_request_to_model_upstream(body_for_upstream, model_config, fallback_model, upstream_model, config.default_stream)
             log(
                 "codex request "
                 f"model={body.get('model')} route={model_config.model_id} "
@@ -1676,6 +1846,33 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     send_json(self, 500, responses_error_payload(str(exc)))
                 except Exception:
                     pass
+
+    def send_anthropic_text_stream(self, model_config: ModelConfig, text: str) -> None:
+        message_id = anthropic_message_id()
+        send_sse_headers(self)
+        write_sse(self, "message_start", {"type": "message_start", "message": {"id": message_id, "type": "message", "role": "assistant", "model": model_config.model_id, "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})
+        write_sse(self, "content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+        write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
+        write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": 0})
+        write_sse(self, "message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": max(1, len(text) // 4)}})
+        write_sse(self, "message_stop", {"type": "message_stop"})
+        self.close_connection = True
+
+    def send_responses_text_stream(self, model_config: ModelConfig, text: str, input_tokens: int = 0) -> None:
+        request_id = response_id()
+        item_id = response_output_item_id()
+        send_sse_headers(self)
+        write_sse(self, "response.created", {"type": "response.created", "sequence_number": 0, "response": {"id": request_id, "object": "response", "created_at": int(time.time()), "status": "in_progress", "model": model_config.model_id, "output": []}})
+        write_sse(self, "response.in_progress", {"type": "response.in_progress", "sequence_number": 1, "response": {"id": request_id, "status": "in_progress"}})
+        write_sse(self, "response.output_item.added", {"type": "response.output_item.added", "sequence_number": 2, "output_index": 0, "item": {"id": item_id, "type": "message", "role": "assistant", "status": "in_progress", "content": []}})
+        write_sse(self, "response.content_part.added", {"type": "response.content_part.added", "sequence_number": 3, "item_id": item_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})
+        write_sse(self, "response.output_text.delta", {"type": "response.output_text.delta", "sequence_number": 4, "item_id": item_id, "output_index": 0, "content_index": 0, "delta": text})
+        write_sse(self, "response.output_text.done", {"type": "response.output_text.done", "sequence_number": 5, "item_id": item_id, "output_index": 0, "content_index": 0, "text": text})
+        write_sse(self, "response.content_part.done", {"type": "response.content_part.done", "sequence_number": 6, "item_id": item_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": text}})
+        output = [{"id": item_id, "type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": text}]}]
+        write_sse(self, "response.output_item.done", {"type": "response.output_item.done", "sequence_number": 7, "output_index": 0, "item": output[0]})
+        write_sse(self, "response.completed", {"type": "response.completed", "sequence_number": 8, "response": responses_completed_payload(request_id, model_config.model_id, output, input_tokens, text)})
+        self.close_connection = True
 
     def handle_responses_streaming(self, body: Dict[str, Any], upstream_payload: Dict[str, Any], auth_token: str, upstream_url: str, timeout: int, model_config: ModelConfig) -> None:
         request_id = response_id()

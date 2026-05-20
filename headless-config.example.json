@@ -20,7 +20,10 @@
       "base_url": "https://genaiapi.shanghaitech.edu.cn/api/v1/response",
       "api_key": "PUT_YOUR_API_KEY_HERE",
       "upstream_model": "GPT-5.5",
-      "api_format": "responses"
+      "api_format": "responses",
+      "supports_image": true,
+      "supports_audio": false,
+      "supports_video": false
     },
     {
       "name": "DeepSeek Pro",
@@ -28,7 +31,10 @@
       "base_url": "https://genaiapi.shanghaitech.edu.cn/api/v1/start",
       "api_key": "PUT_YOUR_API_KEY_HERE",
       "upstream_model": "deepseek-pro",
-      "api_format": "chat_completions"
+      "api_format": "chat_completions",
+      "supports_image": false,
+      "supports_audio": false,
+      "supports_video": false
     },
     {
       "name": "DeepSeek Chat",
@@ -36,7 +42,10 @@
       "base_url": "https://genaiapi.shanghaitech.edu.cn/api/v1/start",
       "api_key": "PUT_YOUR_API_KEY_HERE",
       "upstream_model": "deepseek-chat",
-      "api_format": "chat_completions"
+      "api_format": "chat_completions",
+      "supports_image": false,
+      "supports_audio": false,
+      "supports_video": false
     },
     {
       "name": "GLM Chat",
@@ -44,7 +53,10 @@
       "base_url": "https://genaiapi.shanghaitech.edu.cn/api/v1/start",
       "api_key": "PUT_YOUR_API_KEY_HERE",
       "upstream_model": "glm-chat",
-      "api_format": "chat_completions"
+      "api_format": "chat_completions",
+      "supports_image": false,
+      "supports_audio": false,
+      "supports_video": false
     },
     {
       "name": "Qwen Instruct",
@@ -52,7 +64,10 @@
       "base_url": "https://genaiapi.shanghaitech.edu.cn/api/v1/start",
       "api_key": "PUT_YOUR_API_KEY_HERE",
       "upstream_model": "qwen-instruct",
-      "api_format": "chat_completions"
+      "api_format": "chat_completions",
+      "supports_image": true,
+      "supports_audio": false,
+      "supports_video": false
     }
   ]
 }

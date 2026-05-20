@@ -820,6 +820,19 @@ class IosProxyApp(QMainWindow):
         self.api_format_combo.setObjectName("model_api_format_combo")
         self.api_format_combo.addItems(("responses", "chat_completions"))
         self.api_format_combo.currentTextChanged.connect(self.on_api_format_changed)
+        self.supports_image_check = QCheckBox("Images")
+        self.supports_image_check.setObjectName("model_supports_image_check")
+        self.supports_audio_check = QCheckBox("Audio")
+        self.supports_audio_check.setObjectName("model_supports_audio_check")
+        self.supports_video_check = QCheckBox("Video")
+        self.supports_video_check.setObjectName("model_supports_video_check")
+        self.modality_checks = QWidget()
+        modality_layout = QHBoxLayout(self.modality_checks)
+        modality_layout.setContentsMargins(0, 0, 0, 0)
+        modality_layout.addWidget(self.supports_image_check)
+        modality_layout.addWidget(self.supports_audio_check)
+        modality_layout.addWidget(self.supports_video_check)
+        modality_layout.addStretch(1)
         for row, (label, widget) in enumerate((
             ("Display Name", self.name_edit),
             ("Model ID for Claude Code", self.model_id_edit),
@@ -827,16 +840,17 @@ class IosProxyApp(QMainWindow):
             ("API Key", self.api_key_edit),
             ("Upstream Model", self.upstream_model_edit),
             ("API Format", self.api_format_combo),
+            ("Input Types", self.modality_checks),
         )):
             edit_layout.addWidget(QLabel(label), row, 0)
             edit_layout.addWidget(widget, row, 1)
-        model_hint = QLabel("Step 1: Fill API Key, Base URL, API Format, and Upstream Model. API Format changes Base URL automatically.")
+        model_hint = QLabel("Step 1: Fill API Key, Base URL, API Format, Upstream Model, and which input types this route supports.")
         model_hint.setObjectName("SectionHint")
-        edit_layout.addWidget(model_hint, 6, 0, 1, 2)
+        edit_layout.addWidget(model_hint, 7, 0, 1, 2)
         important_hint = QLabel("Important: For GPT models, choose API Format = responses.")
         important_hint.setObjectName("DangerText")
-        edit_layout.addWidget(important_hint, 7, 0, 1, 2)
-        edit_layout.addWidget(self.button("Apply Model Changes", self.apply_model, primary=True), 8, 1, alignment=Qt.AlignRight)
+        edit_layout.addWidget(important_hint, 8, 0, 1, 2)
+        edit_layout.addWidget(self.button("Apply Model Changes", self.apply_model, primary=True), 9, 1, alignment=Qt.AlignRight)
         edit_layout.setColumnStretch(1, 1)
         body.addWidget(edit_group, 2)
         main.addLayout(body)
@@ -1047,6 +1061,9 @@ class IosProxyApp(QMainWindow):
         self.api_key_edit.setText(model.api_key)
         self.upstream_model_edit.setText(model.upstream_model)
         self.api_format_combo.setCurrentText(getattr(model, "api_format", DEFAULT_API_FORMAT) or DEFAULT_API_FORMAT)
+        self.supports_image_check.setChecked(bool(getattr(model, "supports_image", False)))
+        self.supports_audio_check.setChecked(bool(getattr(model, "supports_audio", False)))
+        self.supports_video_check.setChecked(bool(getattr(model, "supports_video", False)))
 
     def on_api_format_changed(self, api_format: str) -> None:
         debug_log(f"api format changed value={api_format!r}")
@@ -1098,6 +1115,9 @@ class IosProxyApp(QMainWindow):
             self.api_key_edit.text().strip(),
             self.upstream_model_edit.text().strip() or self.model_id_edit.text().strip(),
             self.api_format_combo.currentText().strip() or DEFAULT_API_FORMAT,
+            self.supports_image_check.isChecked(),
+            self.supports_audio_check.isChecked(),
+            self.supports_video_check.isChecked(),
         )
         if not model.model_id or not model.base_url:
             self.error("Missing value", "Model ID and Base URL are required.")

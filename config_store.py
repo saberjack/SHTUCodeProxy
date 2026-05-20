@@ -36,6 +36,20 @@ def strip_model_date_suffix(model_id: str) -> str:
     return model_id
 
 
+def bool_from_config(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
 @dataclass
 class ModelConfig:
     name: str
@@ -44,20 +58,28 @@ class ModelConfig:
     api_key: str
     upstream_model: str
     api_format: str
+    supports_image: bool = False
+    supports_audio: bool = False
+    supports_video: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelConfig":
         model_id = str(data.get("model_id") or data.get("id") or DEFAULT_MODEL_ID).strip()
+        upstream_model = str(data.get("upstream_model") or model_id).strip()
+        legacy_multimodal = bool_from_config(data.get("supports_multimodal"), default_supports_image(model_id, upstream_model))
         return cls(
             name=str(data.get("name") or model_id).strip(),
             model_id=model_id,
             base_url=str(data.get("base_url") or DEFAULT_UPSTREAM_URL).strip(),
             api_key=str(data.get("api_key") or "").strip(),
-            upstream_model=str(data.get("upstream_model") or model_id).strip(),
+            upstream_model=upstream_model,
             api_format=str(data.get("api_format") or DEFAULT_API_FORMAT).strip(),
+            supports_image=bool_from_config(data.get("supports_image"), legacy_multimodal),
+            supports_audio=bool_from_config(data.get("supports_audio"), False),
+            supports_video=bool_from_config(data.get("supports_video"), False),
         )
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "model_id": self.model_id,
@@ -65,7 +87,15 @@ class ModelConfig:
             "api_key": self.api_key,
             "upstream_model": self.upstream_model,
             "api_format": self.api_format,
+            "supports_image": self.supports_image,
+            "supports_audio": self.supports_audio,
+            "supports_video": self.supports_video,
         }
+
+
+def default_supports_image(model_id: Any, upstream_model: Any = None) -> bool:
+    model_text = f"{model_id or ''} {upstream_model or ''}".lower()
+    return "gpt-5.5" in model_text or "qwen-instruct" in model_text
 
 
 @dataclass
@@ -109,6 +139,7 @@ class AppConfig:
                     api_key="",
                     upstream_model=DEFAULT_MODEL_ID,
                     api_format=DEFAULT_API_FORMAT,
+                    supports_image=True,
                 )
             ],
         )
@@ -205,6 +236,7 @@ def seed_builtin_model_routes(config: AppConfig) -> AppConfig:
             api_key="",
             upstream_model=model_id,
             api_format=api_format,
+            supports_image=default_supports_image(model_id, model_id),
         ))
     model_ids = {model.model_id for model in config.models}
     if config.codex_model_id not in model_ids:

@@ -29,11 +29,17 @@ from proxy import (
     responses_request_to_chat_completions,
     responses_json_to_anthropic_message,
     responses_request_to_upstream,
+    anthropic_current_user_modalities,
     anthropic_message_id,
+    responses_current_user_modalities,
     response_id,
     chat_completion_json_to_responses,
     stop_reason_from_done,
     tool_arguments_json,
+    unsupported_modalities,
+    unsupported_modalities_message,
+    sanitized_anthropic_body_for_model,
+    sanitized_responses_body_for_model,
 )
 
 
@@ -1179,6 +1185,52 @@ def exercise_structured_content_passthrough() -> None:
     assert_true(response_content[1] == {"type": "input_file", "file_url": "https://example.invalid/a.pdf"}, "Anthropic document URL should map to Responses input_file")
 
 
+def exercise_multimodal_capability_config() -> None:
+    gpt_model = ModelConfig.from_dict({"model_id": "GPT-5.5", "upstream_model": "GPT-5.5"})
+    qwen_model = ModelConfig.from_dict({"model_id": "qwen-instruct", "upstream_model": "qwen-instruct", "api_format": "chat_completions"})
+    glm_model = ModelConfig.from_dict({"model_id": "glm-chat", "upstream_model": "glm-chat", "api_format": "chat_completions"})
+    deepseek_model = ModelConfig.from_dict({"model_id": "deepseek-chat", "upstream_model": "deepseek-chat", "api_format": "chat_completions"})
+    assert_true(gpt_model.supports_image and not gpt_model.supports_audio and not gpt_model.supports_video, "GPT-5.5 should default to image-only multimodal support")
+    assert_true(qwen_model.supports_image and not qwen_model.supports_audio and not qwen_model.supports_video, "qwen-instruct should default to image-only multimodal support")
+    assert_true(not glm_model.supports_image and not glm_model.supports_audio and not glm_model.supports_video, "glm-chat should default to text-only")
+    assert_true(not deepseek_model.supports_image and not deepseek_model.supports_audio and not deepseek_model.supports_video, "deepseek-chat should default to text-only")
+    assert_true(ModelConfig.from_dict({"model_id": "custom-vision", "supports_image": True}).supports_image, "explicit image config should be preserved")
+    assert_true(ModelConfig.from_dict({"model_id": "legacy-vision", "supports_multimodal": True}).supports_image, "legacy multimodal config should enable image support")
+    assert_true(not ModelConfig.from_dict({"model_id": "custom-text", "supports_image": "false"}).supports_image, "string false should parse as disabled")
+    anthropic_body = {"messages": [{"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "image", "source": {"type": "url", "url": "https://example.invalid/a.png"}}]}]}
+    responses_body = {"input": [{"role": "user", "content": [{"type": "input_text", "text": "look"}, {"type": "input_image", "image_url": "https://example.invalid/a.png"}]}]}
+    assert_true(anthropic_current_user_modalities(anthropic_body) == {"image"}, "Anthropic current image input should be detected")
+    assert_true(responses_current_user_modalities(responses_body) == {"image"}, "Responses current image input should be detected")
+    assert_true(unsupported_modalities(glm_model, {"image", "audio"}) == {"image", "audio"}, "Unsupported modalities should be specific")
+    assert_true("图片识别" in unsupported_modalities_message(glm_model, {"image"}), "Unsupported message should be user-facing")
+
+    anthropic_history_body = {
+        "messages": [
+            anthropic_body["messages"][0],
+            {"role": "assistant", "content": [{"type": "text", "text": "模型 glm-chat 当前配置为不支持图片识别。"}]},
+            {"role": "user", "content": "继续回答纯文本"},
+        ]
+    }
+    assert_true(not anthropic_current_user_modalities(anthropic_history_body), "Historical image should not block current text-only Anthropic turn")
+    sanitized_anthropic = sanitized_anthropic_body_for_model(anthropic_history_body, glm_model)
+    assert_true(not any(isinstance(part, dict) and part.get("type") == "image" for part in sanitized_anthropic["messages"][0]["content"]), "Historical Anthropic image should be stripped before forwarding to text-only model")
+    qwen_sanitized_anthropic = sanitized_anthropic_body_for_model(anthropic_body, qwen_model)
+    assert_true(any(isinstance(part, dict) and part.get("type") == "image" for part in qwen_sanitized_anthropic["messages"][0]["content"]), "Image-capable model should keep image input even if audio/video are disabled")
+
+    responses_history_body = {
+        "input": [
+            responses_body["input"][0],
+            {"role": "assistant", "content": [{"type": "output_text", "text": "模型 glm-chat 当前配置为不支持图片识别。"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "继续回答纯文本"}]},
+        ]
+    }
+    assert_true(not responses_current_user_modalities(responses_history_body), "Historical image should not block current text-only Responses turn")
+    sanitized_responses = sanitized_responses_body_for_model(responses_history_body, glm_model)
+    assert_true(not any(isinstance(part, dict) and part.get("type") == "input_image" for part in sanitized_responses["input"][0]["content"]), "Historical Responses image should be stripped before forwarding to text-only model")
+    qwen_sanitized_responses = sanitized_responses_body_for_model(responses_body, qwen_model)
+    assert_true(any(isinstance(part, dict) and part.get("type") == "input_image" for part in qwen_sanitized_responses["input"][0]["content"]), "Image-capable Responses model should keep image input even if audio/video are disabled")
+
+
 def main() -> int:
     tmpdir = Path.cwd() / ".smoke_tmp"
     if tmpdir.exists():
@@ -1238,6 +1290,7 @@ def main() -> int:
         exercise_cross_platform_tool_matrix()
         exercise_multimodal_chat_passthrough()
         exercise_structured_content_passthrough()
+        exercise_multimodal_capability_config()
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

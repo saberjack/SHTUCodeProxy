@@ -1,5 +1,27 @@
 # Changelog
 
+## v4.3.2 - 2026-05-20
+
+Model-level multimodal capability guard release.
+
+### Added
+
+- Added per-model `supports_image`, `supports_audio`, and `supports_video` capability flags in GUI, saved config, and headless Linux config files.
+- Defaulted GPT-5.5 and qwen-instruct to image-capable, while GLM and DeepSeek chat routes remain text-only by default.
+
+### Fixed
+
+- Blocked unsupported image, audio, and video requests before they reach incompatible upstream models.
+- Returned protocol-compatible assistant messages for unsupported multimodal requests on both `/v1/messages` and `/v1/responses`, including streaming and non-streaming modes.
+- Preserved image passthrough for routes explicitly marked as image-capable, and left file/document passthrough unchanged.
+- Parsed string boolean config values such as `"false"` correctly for manually edited headless config files.
+
+### Verified
+
+- Verified qwen-instruct image URL and base64 image requests against the real upstream API.
+- Verified GLM multimodal requests are blocked locally and subsequent text requests still work.
+- Re-tested smoke coverage and Python syntax checks.
+
 ## v4.3.1 - 2026-05-19
 
 Codex qwen-instruct empty-response hotfix.
