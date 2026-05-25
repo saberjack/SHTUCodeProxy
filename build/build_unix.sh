@@ -1,7 +1,6 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
-
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="$(tr -d '\r\n' < VERSION 2>/dev/null || echo dev)"
@@ -144,7 +143,7 @@ if [[ "$ONE_DIR_ONLY" != "1" ]]; then
     --add-data "src/safe_io.py:." \
     --add-data "VERSION:." \
     --add-data "docs/headless-config.example.json:." \
-    src/cli.py\n
+    src/cli.py
   cp "dist/$CLI_NAME" "release/$CLI_NAME"
   rm -rf "build/$HEADLESS_BUNDLE"
   mkdir -p "build/$HEADLESS_BUNDLE"
@@ -195,4 +194,4 @@ fi
 find release -type f \( -name '*_probe.py' -o -name 'local_key_probe.py' \) -delete 2>/dev/null || true
 find release -type d -name 'test_support' -prune -exec rm -rf {} + 2>/dev/null || true
 
-echo "Build complete. Release files are in: $ROOT/release"
+echo "Build complete. Release files are in: $(cd "$ROOT/.." && pwd)/release"
