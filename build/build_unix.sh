@@ -77,12 +77,12 @@ if [[ "$ONE_FILE_ONLY" != "1" ]]; then
     --icon "build/shtucodeproxy.ico" \
     "${PYINSTALLER_LINUX_BINARIES[@]}" \
     --add-data "build/shtucodeproxy.ico:assets" \
-    --add-data "proxy.py:." \
-    --add-data "cli.py:." \
-    --add-data "pyqt_gui.py:." \
-    --add-data "platform_utils.py:." \
-    --add-data "config_store.py:." \
-    --add-data "safe_io.py:." \
+    --add-data "src/proxy.py:." \
+    --add-data "src/cli.py:." \
+    --add-data "src/pyqt_gui.py:." \
+    --add-data "src/platform_utils.py:." \
+    --add-data "src/config_store.py:." \
+    --add-data "src/safe_io.py:." \
     --add-data "VERSION:." \
     --add-data "docs/headless-config.example.json:." \
     app.py
@@ -90,7 +90,7 @@ if [[ "$ONE_FILE_ONLY" != "1" ]]; then
   rm -rf "build/$PACKAGE_ROOT"
   mkdir -p "build/$PACKAGE_ROOT"
   cp -R "dist/$FOLDER_NAME" "build/$PACKAGE_ROOT/$FOLDER_NAME"
-  cp linux_launcher.py "build/$PACKAGE_ROOT/run_shtucodeproxy.py"
+  cp src/linux_launcher.py "build/$PACKAGE_ROOT/run_shtucodeproxy.py"
   cp "build/shtucodeproxy.ico" "build/$PACKAGE_ROOT/shtucodeproxy.ico"
   cp docs/headless-config.example.json "build/$PACKAGE_ROOT/headless-config.example.json"
   cat > "build/$PACKAGE_ROOT/shtucodeproxy.desktop" <<EOF
@@ -137,15 +137,14 @@ if [[ "$ONE_DIR_ONLY" != "1" ]]; then
     --onefile \
     --console \
     --name "$CLI_NAME" \
-    --add-data "proxy.py:." \
-    --add-data "cli.py:." \
-    --add-data "platform_utils.py:." \
-    --add-data "config_store.py:." \
-    --add-data "safe_io.py:." \
+    --add-data "src/proxy.py:." \
+    --add-data "src/cli.py:." \
+    --add-data "src/platform_utils.py:." \
+    --add-data "src/config_store.py:." \
+    --add-data "src/safe_io.py:." \
     --add-data "VERSION:." \
     --add-data "docs/headless-config.example.json:." \
-    cli.py
-
+    src/cli.py\n
   cp "dist/$CLI_NAME" "release/$CLI_NAME"
   rm -rf "build/$HEADLESS_BUNDLE"
   mkdir -p "build/$HEADLESS_BUNDLE"
@@ -179,12 +178,12 @@ EOF
     --icon "build/shtucodeproxy.ico" \
     "${PYINSTALLER_LINUX_BINARIES[@]}" \
     --add-data "build/shtucodeproxy.ico:assets" \
-    --add-data "proxy.py:." \
-    --add-data "cli.py:." \
-    --add-data "pyqt_gui.py:." \
-    --add-data "platform_utils.py:." \
-    --add-data "config_store.py:." \
-    --add-data "safe_io.py:." \
+    --add-data "src/proxy.py:." \
+    --add-data "src/cli.py:." \
+    --add-data "src/pyqt_gui.py:." \
+    --add-data "src/platform_utils.py:." \
+    --add-data "src/config_store.py:." \
+    --add-data "src/safe_io.py:." \
     --add-data "VERSION:." \
     --add-data "docs/headless-config.example.json:." \
     app.py

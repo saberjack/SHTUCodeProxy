@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$InstallDeps,
   [switch]$OneDirOnly,
   [switch]$OneFileOnly
@@ -36,14 +36,15 @@ if (-not $OneFileOnly) {
     --windowed `
     --icon "build\shtucodeproxy.ico" `
     --add-data "build\shtucodeproxy.ico;assets" `
-    --add-data "proxy.py;." `
-    --add-data "cli.py;." `
-    --add-data "pyqt_gui.py;." `
-    --add-data "platform_utils.py;." `
-    --add-data "config_store.py;." `
-    --add-data "safe_io.py;." `
+    --add-data "src\proxy.py;." `
+    --add-data "src\cli.py;." `
+    --add-data "src\pyqt_gui.py;." `
+    --add-data "src\platform_utils.py;." `
+    --add-data "src\config_store.py;." `
+    --add-data "src\safe_io.py;." `
     --add-data "VERSION;." `
     --add-data "docs\headless-config.example.json;." `
+    --paths src `
     app.py
 
   Compress-Archive `
@@ -65,14 +66,15 @@ if (-not $OneDirOnly) {
     --windowed `
     --icon "build\shtucodeproxy.ico" `
     --add-data "build\shtucodeproxy.ico;assets" `
-    --add-data "proxy.py;." `
-    --add-data "cli.py;." `
-    --add-data "pyqt_gui.py;." `
-    --add-data "platform_utils.py;." `
-    --add-data "config_store.py;." `
-    --add-data "safe_io.py;." `
+    --add-data "src\proxy.py;." `
+    --add-data "src\cli.py;." `
+    --add-data "src\pyqt_gui.py;." `
+    --add-data "src\platform_utils.py;." `
+    --add-data "src\config_store.py;." `
+    --add-data "src\safe_io.py;." `
     --add-data "VERSION;." `
     --add-data "docs\headless-config.example.json;." `
+    --paths src `
     app.py
 
   Copy-Item `
