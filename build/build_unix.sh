@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="$(tr -d '\r\n' < VERSION 2>/dev/null || echo dev)"
+VERSION="$(sed '1s/^\xEF\xBB\xBF//' VERSION | tr -d '\r\n' 2>/dev/null || echo dev)"
 OS_NAME="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH_NAME="$(uname -m)"
 APP_NAME="SHTUCodeProxy-v${VERSION}-${OS_NAME}-${ARCH_NAME}"
@@ -55,13 +55,13 @@ if [[ "$OS_NAME" == "linux" ]]; then
     libXrender.so.1 \
     libxcb.so.1 \
     libxcb-cursor.so.0 \
-    libxcb-icccm.so.4 \
+    libxcb-icccm4 \
     libxcb-image.so.0 \
-    libxcb-keysyms.so.1 \
+    libxcb-keysyms1 \
     libxcb-randr.so.0 \
-    libxcb-render-util.so.0 \
-    libxcb-shape.so.0 \
-    libxcb-xinerama.so.0 \
+    libxcb-render-util0 \
+    libxcb-shape0 \
+    libxcb-xinerama0 \
     libxkbcommon.so.0 \
     libxkbcommon-x11.so.0; do
     collect_library "$library"
