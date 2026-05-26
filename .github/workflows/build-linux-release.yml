@@ -1,4 +1,4 @@
-﻿name: Build Linux Release Asset
+name: Build Linux Release Asset
 
 on:
   workflow_dispatch:
@@ -7,6 +7,10 @@ on:
         description: "Release tag to attach assets to"
         required: true
         default: "v4.4.2"
+      ref:
+        description: "Git ref to build from (branch, tag, or SHA). Defaults to main."
+        required: false
+        default: "main"
 
 permissions:
   contents: write
@@ -18,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag }}
+          ref: ${{ github.event.inputs.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -53,6 +57,9 @@ jobs:
 
       - name: Build Linux packages
         run: bash ./build/build_unix.sh
+
+      - name: List release artifacts
+        run: ls -la release/
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
