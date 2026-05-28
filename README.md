@@ -10,7 +10,7 @@ No testing has been done on whether it is effective with third-party APIs.
 
 > **Important:** GPT-series models should use the `responses` API Format. Chat-only models such as GLM, Qwen, or DeepSeek can use `chat_completions` when their upstream endpoint requires it.
 
-Current release: **v4.4.2**
+Current release: **v4.4.5**
 
 SHTUCodeProxy is a cross-platform local proxy and desktop configuration tool for connecting **Claude Code**, **Codex CLI**, **Codex Desktop**, and ordinary API clients to the ShanghaiTech University campus **GenAI API** or compatible model endpoints.
 
