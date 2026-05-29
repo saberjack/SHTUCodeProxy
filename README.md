@@ -105,10 +105,11 @@ Invoke-WebRequest -UseBasicParsing `
 
 ## 已知限制
 
-- 工具调用在 Anthropic `tool_use/tool_result` 和上游 `tool_calls` / `function_call` 格式之间转换
-- Token 用量为估算值
-- 图片支持为 best-effort
-- 复杂的 Claude Code 自主编码工作流可能需要额外边界测试
+- **Chat 模型并发时空响应**：Qwen 等 Chat 模型在高并发时上游可能返回空内容，代理会自动重试并回退到流式请求，但仍偶尔可能出现空回复
+- **Qwen 推理模式**：Qwen-instruct 有时会进入推理模式（reasoning），此时实际输出在 `reasoning` 字段而非 `content` 中，代理会自动提取，但展示的是原始推理过程而非最终回答
+- **Token 用量为估算**：上游 Chat Completions 模型不返回精确 token 数，代理按字符数估算
+- **图片/多模态为 best-effort**：仅部分模型支持图片输入，输出图片不可用
+- **仅适用于校园 GenAI API**：未对第三方 API 做兼容性测试
 
 ## 常见问题
 
