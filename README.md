@@ -6,7 +6,6 @@
 
 > **提示**：GPT 系列模型应使用 `responses` API 格式；GLM、Qwen、DeepSeek 等 Chat 模型可使用 `chat_completions`。
 
-Current release: **v4.4.5**
 
 ---
 
