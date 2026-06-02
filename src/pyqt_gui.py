@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime as _dt
 import json
@@ -1390,7 +1390,8 @@ class IosProxyApp(QMainWindow):
 
     def setup_selected_client(self) -> None:
         if self.client_mode() == "codex":
-            self.write_codex_config()
+            if not self.write_codex_config():
+                self.error("Save + Connect failed", "Could not start proxy. Check your config and try Start Proxy separately.")
         else:
             self.setup_and_launch()
 
@@ -1498,3 +1499,4 @@ def run() -> int:
         return app.exec_()
     finally:
         instance_lock.__exit__(None, None, None)
+
