@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -120,7 +121,7 @@ class AppConfig:
 
     @classmethod
     def default(cls) -> "AppConfig":
-        return cls(
+        result = cls(
             host=DEFAULT_HOST,
             port=DEFAULT_PORT,
             default_model_id=DEFAULT_MODEL_ID,
@@ -146,6 +147,8 @@ class AppConfig:
                 )
             ],
         )
+        result._loaded_at = time.time()
+        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AppConfig":
@@ -161,7 +164,7 @@ class AppConfig:
             key: str(raw_model_env.get(key) or default_model_id).strip()
             for key in MODEL_ENV_KEYS
         }
-        return cls(
+        result = cls(
             host=str(data.get("host") or default.host).strip(),
             port=int(data.get("port") or default.port),
             default_model_id=default_model_id,
@@ -177,6 +180,8 @@ class AppConfig:
             diagnostic_logging=bool(data.get("diagnostic_logging", default.diagnostic_logging)),
             models=models or default.models,
         )
+        result._loaded_at = time.time()
+        return result
 
     def to_dict(self) -> Dict[str, Any]:
         return {

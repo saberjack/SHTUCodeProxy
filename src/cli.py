@@ -90,8 +90,6 @@ def codex_root_config_block(config: AppConfig) -> str:
         f'model_provider = "{provider}"',
         f'sandbox_mode = "{sandbox_mode}"',
     ]
-    if os.name == "nt" and sandbox_mode != "danger-full-access":
-        lines += ["", "[windows]", 'sandbox = "elevated"']
     lines.append("")
     return "\n".join(lines)
 
@@ -167,7 +165,7 @@ def parse_flat_toml_section(existing: str, section_name: str) -> dict[str, objec
     return values
 
 
-def codex_preserved_config_block(existing: str) -> str:
+def codex_preserved_config_block(existing: str, config: AppConfig = None) -> str:
     try:
         parsed = tomllib.loads(existing) if existing.strip() else {}
     except tomllib.TOMLDecodeError:
@@ -188,7 +186,8 @@ def codex_preserved_config_block(existing: str) -> str:
         windows = parsed.get("windows") if isinstance(parsed.get("windows"), dict) else parse_flat_toml_section(existing, "windows")
         windows_values = dict(windows)
         # Only set elevated sandbox when using a sandboxed mode; danger-full-access means no sandbox
-        if parsed.get("sandbox_mode") != "danger-full-access":
+        effective_sandbox_mode = getattr(config, "codex_sandbox_mode", "") or parsed.get("sandbox_mode", "")
+        if effective_sandbox_mode != "danger-full-access":
             windows_values["sandbox"] = "elevated"
         elif "sandbox" in windows_values:
             del windows_values["sandbox"]
@@ -248,7 +247,7 @@ def write_codex_config(config: AppConfig) -> Path:
         existing = target.read_text(encoding="utf-8-sig")
     root = codex_root_config_block(config)
     provider_profile = codex_provider_profile_block(config)
-    preserved = codex_preserved_config_block(existing)
+    preserved = codex_preserved_config_block(existing, config)
     combined = root + (preserved + "\n\n" if preserved else "") + provider_profile
     atomic_write_text(target, combined, validate=validate_codex_config)
     return target

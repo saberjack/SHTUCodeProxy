@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from platform_utils import app_dir
-from config_store import AppConfig, ModelConfig, load_config
+from config_store import AppConfig, ModelConfig, config_path, load_config
 
 DEFAULT_UPSTREAM_URL = "https://genaiapi.shanghaitech.edu.cn/api/v1/response"
 DEFAULT_MODEL = "GPT-5.5"
@@ -323,6 +323,13 @@ def current_config() -> AppConfig:
     global ACTIVE_CONFIG
     if ACTIVE_CONFIG is None:
         ACTIVE_CONFIG = load_config()
+        return ACTIVE_CONFIG
+    try:
+        target = config_path()
+        if target.exists() and target.stat().st_mtime > ACTIVE_CONFIG._loaded_at:
+            ACTIVE_CONFIG = load_config()
+    except Exception:
+        pass
     return ACTIVE_CONFIG
 
 
@@ -2503,27 +2510,28 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 log(f"responses non-stream fallback model={model_config.model_id} error={exc}")
                 # Fall through to streaming fallback
-        upstream_payload["stream"] = False
-        upstream_payload.pop("stream_options", None)
-        try:
-            with open_upstream(upstream_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
-                raw_payload = response.read().decode("utf-8", errors="replace")
-            payload = json.loads(raw_payload)
-            if isinstance(payload, dict) and payload.get("success") is False:
-                upstream_msg = payload.get("message", "") or payload.get("error", "") or json.dumps(payload, ensure_ascii=False)[:200]
-                log(f"upstream error model={model_config.model_id} message={upstream_msg}")
-                send_json(self, 502, responses_error_payload(f"Upstream rejected: {upstream_msg}"))
+        else:
+            upstream_payload["stream"] = False
+            upstream_payload.pop("stream_options", None)
+            try:
+                with open_upstream(upstream_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
+                    raw_payload = response.read().decode("utf-8", errors="replace")
+                payload = json.loads(raw_payload)
+                if isinstance(payload, dict) and payload.get("success") is False:
+                    upstream_msg = payload.get("message", "") or payload.get("error", "") or json.dumps(payload, ensure_ascii=False)[:200]
+                    log(f"upstream error model={model_config.model_id} message={upstream_msg}")
+                    send_json(self, 502, responses_error_payload(f"Upstream rejected: {upstream_msg}"))
+                    return
+                log(f"codex response done model={model_config.model_id} non_stream=true{usage_cache_debug(payload.get('usage'))}")
+                send_json(self, 200, payload)
                 return
-            log(f"codex response done model={model_config.model_id} non_stream=true{usage_cache_debug(payload.get('usage'))}")
-            send_json(self, 200, payload)
-            return
-        except urllib.error.HTTPError as exc:
-            message = upstream_error_message(exc)
-            log(f"upstream http error model={model_config.model_id} status={exc.code} body={message[:500]}")
-            send_json(self, 502, responses_error_payload(upstream_error_message(exc)))
-            return
-        except Exception as exc:
-            log(f"non-stream responses fallback model={model_config.model_id} error={exc}")
+            except urllib.error.HTTPError as exc:
+                message = upstream_error_message(exc)
+                log(f"upstream http error model={model_config.model_id} status={exc.code} body={message[:500]}")
+                send_json(self, 502, responses_error_payload(upstream_error_message(exc)))
+                return
+            except Exception as exc:
+                log(f"non-stream responses fallback model={model_config.model_id} error={exc}")
         upstream_payload["stream"] = True
         text_parts: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
