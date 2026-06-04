@@ -1127,6 +1127,10 @@ class IosProxyApp(QMainWindow):
             self.supports_audio_check.isChecked(),
             self.supports_video_check.isChecked(),
         )
+        # Preserve fields not exposed in GUI
+        old_model = self.config_data.models[self.selected_index]
+        model.max_context_tokens = old_model.max_context_tokens
+        model.stream_bridge = old_model.stream_bridge
         if not model.model_id or not model.base_url:
             self.error("Missing value", "Model ID and Base URL are required.")
             return False

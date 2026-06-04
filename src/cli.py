@@ -561,6 +561,10 @@ def use_model(model_id: str, *, codex: bool = False, claude: bool = False) -> Ap
     if codex:
         config.codex_model_id = model_id
     save_config(config)
+    if claude:
+        write_claude_settings(config)
+    if codex:
+        write_codex_files(config)
     warn_restart_required_if_running()
     return config
 
