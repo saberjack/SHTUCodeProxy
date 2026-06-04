@@ -2271,6 +2271,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def handle_responses_post(self) -> None:
         try:
             body = read_json_body(self)
+            config = current_config()
             stream = request_stream_enabled(body, config.default_stream)
             model_config = config.find_model(body.get("model"))
             upstream_url = os.getenv("UPSTREAM_RESPONSES_URL") or model_config.base_url
