@@ -1476,6 +1476,9 @@ def responses_tool_choice_to_chat(tool_choice: Any) -> Any:
         return tool_choice
     if tool_choice.get("type") == "function" and tool_choice.get("name"):
         return {"type": "function", "function": {"name": tool_choice["name"]}}
+    choice_type = tool_choice.get("type")
+    if choice_type in ("auto", "none", "required"):
+        return choice_type
     return tool_choice
 
 

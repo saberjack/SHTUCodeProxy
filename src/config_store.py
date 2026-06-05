@@ -120,7 +120,7 @@ def default_max_context_tokens(model_id: Any, upstream_model: Any = None) -> int
     if "deepseek-pro" in model_text:
         return 128000
     if "glm" in model_text:
-        return 131072
+        return 200000
     if "qwen" in model_text:
         return 131072
     return 0

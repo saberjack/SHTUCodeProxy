@@ -1,14 +1,13 @@
-## v4.5.1 (2026-06-04)
+## v4.5.1 (2026-06-05)
 
-Chat Completions message format fixes for upstream compatibility.
+Fix Responses API tool_choice dict-to-string conversion bug.
 
 ### Fixed
 
-- Batched consecutive `function_call` input items into a single assistant message with multiple `tool_calls`. Previously, each `function_call` produced a separate assistant message, violating OpenAI Chat Completions API conventions and causing consecutive assistant-role messages that some upstream APIs reject.
-- Added post-processing to merge consecutive `user` messages and consecutive text-only `assistant` messages in both `responses_request_to_chat_completions` and `anthropic_messages_to_chat_completions`. This prevents API rejections from strict upstreams when multiple `function_call_output` items or conversation turns produce consecutive same-role messages.
-- Removed 3 leftover DEBUG log lines in `handle_non_streaming`.
+- **P0**: Fixed `tool_choice: {"type": "auto"}` from Responses API not converted to string `"auto"` for chat_completions upstream. The `responses_tool_choice_to_chat()` function now correctly maps `{"type": "auto"}` -> `"auto"`, `{"type": "none"}` -> `"none"`, `{"type": "required"}` -> `"required"`. Previously these dict values were passed through unchanged, causing 502 errors from glm-chat, deepseek-pro, deepseek-chat, and qwen-instruct upstreams when Codex sends tool_choice as a dict object. The Messages API path (`/v1/messages`) was not affected since `anthropic_tool_choice_to_openai()` already handled this correctly.
+- **P2**: Updated GLM default context window from 131072 to 200000 to match actual model capability.
 
-## v4.5.0 (2026-06-04)
+## v4.5.0 (2026-06-05)
 
 Codex `/compact` support, context window limits, and glm-chat compatibility fixes.
 
@@ -26,11 +25,18 @@ Codex `/compact` support, context window limits, and glm-chat compatibility fixe
 
 - **P0**: Fixed Codex `/compact` command failing with `stream disconnected before completion` when using glm-chat: the proxy now correctly routes compact requests and handles the chat_completions format conversion round-trip.
 - **P0**: Fixed `'NoneType' object is not iterable` BadRequestError from glm-chat: assistant messages with `tool_calls` now use `content: ""` instead of `content: None`, which glm-chat cannot parse.
-- **P1**: Fixed `tool_choice: auto` being sent when `tools` list is empty, causing upstream API rejection. `tool_choice` is now only included when `tools` is non-empty (both Anthropic and Responses conversion paths).
+- **P0**: Fixed empty stream responses on non-Anthropic upstreams caused by `thinking` parameter passthrough. Stripped `thinking` parameter in request sanitization to prevent `Unknown parameter: 'thinking'` errors on GPT-5.5, GLM, etc.
+- **P1**: Fixed `tool_choice: auto` being sent when `tools` list is empty, causing upstream API rejection. `tool_choice` is now only included when `tools` is non-empty.
 - **P1**: Fixed `use_model` command not writing Claude settings or Codex config files after switching models, causing config drift until manual restart.
+- **P1**: Fixed consecutive `function_call` items producing separate assistant messages, violating Chat Completions API conventions. Now batched into a single assistant message with multiple `tool_calls`.
+- **P1**: Fixed consecutive same-role messages (`user` or `assistant`) causing API rejections from strict upstreams. Added post-processing to merge them.
+- **P1**: Fixed user-customized `model_context_window` and `model_auto_compact_token_limit` being overwritten on Save+Connect. Now preserved when model is unchanged.
+- **P2**: Fixed GLM default context window from 131072 to 200000 to match actual model capability.
+- **P2**: Fixed `max_context_tokens` not auto-inferred for known models when missing from config, causing Codex config.toml to lack context window values.
 
 ### Changed
 
+- Updated default context window values: GPT-5.5=400000, deepseek-chat=192000, deepseek-pro=128000, glm-chat=200000, qwen-instruct=131072.
 - Updated `config.example.json` with all 5 builtin models, default model set to `glm-chat`, and `codex_sandbox_mode` preset.
 - GUI model editor now preserves `max_context_tokens` and `stream_bridge` fields that are not exposed in the GUI.
 
