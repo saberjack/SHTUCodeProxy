@@ -1,3 +1,9 @@
+## v4.6.0 (2026-06-06)
+
+### Fixed
+
+- **P1**: Fixed Claude Code auto mode not recognizing model supports extended thinking. When client sends `thinking: {type: enabled}`, the proxy now injects a synthetic `redacted_thinking` content block at the beginning of the response, enabling Claude Code to correctly identify the model as supporting extended thinking. The `thinking` parameter is still stripped before sending to upstream (which doesn't support it), but a `_thinking_requested` flag is preserved through the request-response cycle to trigger response-side injection. Both streaming and non-streaming Anthropic Messages paths are covered.
+
 ## v4.5.1 (2026-06-05)
 
 Fix Responses API tool_choice bug and add missing Codex route handlers.

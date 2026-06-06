@@ -16,6 +16,7 @@ if (-not $Version) {
 
 if ($InstallDeps) {
   python -m pip install --upgrade pip
+  python -m pip install -r "$Root\requirements.txt"
   python -m pip install pyinstaller
 }
 

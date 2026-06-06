@@ -32,6 +32,9 @@ config.json.bak_*
 *.key
 *.pem
 
+# API keys and secrets directory
+secrets/
+
 # Keep packaged GitHub Release artifact if desired
 !release/
 !release/SHTUClaudeProxy-windows-x64.zip
@@ -113,3 +116,35 @@ ScreenShot_*.png
 # Moved directories
 assets/
 test_support/
+
+# === Dev directory runtime contents ===
+# debug: logs/dumps/profiling are local-only
+debug/logs/*
+debug/dumps/*
+debug/profiling/*
+!debug/logs/.gitkeep
+!debug/dumps/.gitkeep
+!debug/profiling/.gitkeep
+
+# logs: proxy and build logs
+logs/proxy/*
+logs/build/*
+!logs/proxy/.gitkeep
+!logs/build/.gitkeep
+
+# backups: local snapshots
+backups/pre-release/*
+backups/config-snapshots/*
+backups/src-snapshots/*
+!backups/pre-release/.gitkeep
+!backups/config-snapshots/.gitkeep
+!backups/src-snapshots/.gitkeep
+
+# tmp: scratch space, always ignored
+tmp/*
+!tmp/.gitkeep
+
+# test reports and integration artifacts
+tests/reports/*
+tests/integration/__pycache__/
+!tests/reports/.gitkeep

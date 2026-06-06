@@ -1,0 +1,10 @@
+# SHTUCodeProxy - Runtime Dependencies
+# Python 3.10+ required
+
+PyQt5>=5.15.11
+
+# Note: The following are Python stdlib (no pip install needed):
+# - tomllib (3.11+)
+# - http.server, json, os, sys, pathlib, dataclasses, typing,
+#   hashlib, shutil, subprocess, socket, ctypes, threading,
+#   uuid, re, copy, time, argparse, traceback

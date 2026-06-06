@@ -892,6 +892,10 @@ def sanitized_content_for_model(content: Any, model_config: ModelConfig) -> Any:
 
 def sanitized_anthropic_body_for_model(body: Dict[str, Any], model_config: ModelConfig) -> Dict[str, Any]:
     sanitized = dict(body)
+    # WHY: Extract thinking flag before stripping; inject redacted_thinking in response if requested
+    thinking_param = body.get("thinking")
+    if isinstance(thinking_param, dict) and thinking_param.get("type") in ("enabled", "adaptive"):
+        sanitized["_thinking_requested"] = True
     # Strip "thinking" ? no upstream API supports it; causes 400 errors on non-Anthropic models
     sanitized.pop("thinking", None)
     sanitized["tools"] = filter_tools_for_model(body.get("tools"), model_config)
@@ -923,6 +927,10 @@ def sanitized_anthropic_body_for_model(body: Dict[str, Any], model_config: Model
 
 def sanitized_responses_body_for_model(body: Dict[str, Any], model_config: ModelConfig) -> Dict[str, Any]:
     sanitized = dict(body)
+    # WHY: Extract thinking flag before stripping; inject redacted_thinking in response if requested
+    thinking_param = body.get("thinking")
+    if isinstance(thinking_param, dict) and thinking_param.get("type") in ("enabled", "adaptive"):
+        sanitized["_thinking_requested"] = True
     # Strip "thinking" ? no upstream API supports it; causes 400 errors on non-Anthropic models
     sanitized.pop("thinking", None)
     sanitized["tools"] = filter_tools_for_model(body.get("tools"), model_config)
@@ -2071,6 +2079,51 @@ def anthropic_message_id() -> str:
     return f"msg_proxy_{now_ms()}_{uuid.uuid4().hex[:12]}"
 
 
+
+# WHY: When client requests thinking but upstream doesn't support it,
+# inject a synthetic redacted_thinking block so Claude Code recognizes
+# the model as supporting extended thinking (enables auto mode).
+_REDACTED_THINKING_DATA = "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"
+
+def thinking_requested(body: Dict[str, Any]) -> bool:
+    """Check if the original request asked for extended thinking."""
+    return bool(body.get("_thinking_requested"))
+
+
+def inject_redacted_thinking_to_content(content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Prepend a redacted_thinking block to Anthropic Messages response content.
+    
+    WHY: When client requests thinking:{type:enabled} but upstream doesn't support it,
+    Claude Code needs a thinking block in the response to recognize the model as
+    supporting extended thinking (enables auto mode). We use redacted_thinking
+    (opaque data) instead of a visible thinking block to avoid confusing the user
+    with fake reasoning content.
+    """
+    if any(block.get("type") in ("thinking", "redacted_thinking") for block in content):
+        return content  # Already has thinking block from upstream
+    return [{"type": "redacted_thinking", "data": _REDACTED_THINKING_DATA}] + content
+
+
+def emit_redacted_thinking_sse(handler: BaseHTTPRequestHandler, index: int = 0) -> None:
+    """Emit a redacted_thinking block as SSE events in an Anthropic stream.
+    
+    WHY: Same reason as inject_redacted_thinking_to_content, but for streaming path.
+    Sends content_block_start + content_block_delta + content_block_stop for
+    a redacted_thinking block before other content blocks.
+    """
+    write_sse(handler, "content_block_start", {
+        "type": "content_block_start",
+        "index": index,
+        "content_block": {"type": "redacted_thinking", "data": _REDACTED_THINKING_DATA},
+    })
+    # No delta needed for redacted_thinking - the data is in the start event
+    write_sse(handler, "content_block_stop", {
+        "type": "content_block_stop",
+        "index": index,
+    })
+
+
+
 def response_id() -> str:
     return f"resp_proxy_{now_ms()}_{uuid.uuid4().hex[:12]}"
 
@@ -2175,6 +2228,9 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
             })
     if not content:
         content.append({"type": "text", "text": ""})
+    # WHY: If original request asked for thinking, inject redacted_thinking block
+    if thinking_requested(payload):
+        content = inject_redacted_thinking_to_content(content)
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     return {
         "id": anthropic_message_id(),
@@ -2305,8 +2361,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         try:
             body = read_json_body(self)
-            # Note: "thinking" param is NOT injected even when anthropic-beta: interleaved-thinking
-            # header is present, because no upstream API supports it. It is stripped in sanitization.
+            # WHY: "thinking" param is stripped before sending to upstream (no upstream supports it),
+            # but _thinking_requested flag is preserved so we can inject redacted_thinking in the response.
 
             config = current_config()
             stream = request_stream_enabled(body, config.default_stream)
@@ -2322,11 +2378,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 message = unsupported_modalities_message(model_config, unsupported)
                 log(f"blocked unsupported modalities model={model_config.model_id} modalities={','.join(sorted(unsupported))} stream={stream}")
                 if stream:
-                    self.send_anthropic_text_stream(model_config, message)
+                    self.send_anthropic_text_stream(model_config, message, _thinking_requested=thinking_requested(body))
                 else:
                     send_json(self, 200, anthropic_error_message_payload(model_config, message, estimate_anthropic_input_tokens(body)))
                 return
             body_for_upstream = sanitized_anthropic_body_for_model(body, model_config)
+            body["_thinking_requested"] = body_for_upstream.get("_thinking_requested", False)
             if not auth_token:
                 send_json(self, 500, {"type": "error", "error": {"type": "authentication_error", "message": f"No API key configured for model {model_config.model_id}"}})
                 return
@@ -2380,6 +2437,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     send_json(self, 200, responses_unsupported_modalities_payload(model_config, message, estimate_anthropic_input_tokens(body)))
                 return
             body_for_upstream = sanitized_responses_body_for_model(body, model_config)
+            body["_thinking_requested"] = body_for_upstream.get("_thinking_requested", False)
             if not auth_token:
                 send_json(self, 500, responses_error_payload(f"No API key configured for model {model_config.model_id}", "authentication_error"))
                 return
@@ -2409,13 +2467,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-    def send_anthropic_text_stream(self, model_config: ModelConfig, text: str) -> None:
+    def send_anthropic_text_stream(self, model_config: ModelConfig, text: str, _thinking_requested: bool = False) -> None:
         message_id = anthropic_message_id()
         send_sse_headers(self)
         write_sse(self, "message_start", {"type": "message_start", "message": {"id": message_id, "type": "message", "role": "assistant", "model": model_config.model_id, "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})
-        write_sse(self, "content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
-        write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
-        write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": 0})
+        # WHY: If client requested thinking, inject redacted_thinking block before other content
+        _thinking_block_index = 0
+        if _thinking_requested:
+            emit_redacted_thinking_sse(self, index=0)
+            _thinking_block_index = 1
+        write_sse(self, "content_block_start", {"type": "content_block_start", "index": _thinking_block_index, "content_block": {"type": "text", "text": ""}})
+        write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": _thinking_block_index, "delta": {"type": "text_delta", "text": text}})
+        write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index})
         write_sse(self, "message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": max(1, len(text) // 4)}})
         write_sse(self, "message_stop", {"type": "message_stop"})
         self.close_connection = True
@@ -2999,6 +3062,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             },
         })
 
+
+        # WHY: If client requested thinking, inject redacted_thinking block before other content
+        _thinking_block_index = 0
+        if thinking_requested(body):
+            emit_redacted_thinking_sse(self, index=0)
+            _thinking_block_index = 1
+
         output_text_parts: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
         delta_count = 0
@@ -3042,12 +3112,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         converted = None
                         break
                 if converted and converted.get("output"):
+                    if thinking_requested(body): converted["_thinking_requested"] = True
                     anthropic_msg = responses_json_to_anthropic_message(converted, model_config)
                 else:
                     # Fall through to real streaming below
                     raise ValueError("stream_bridge empty, use real streaming")
                 # The rest of the stream_bridge SSE emission
-                for block_index, block in enumerate(anthropic_msg.get("content", [])):
+                for block_index, block in enumerate(anthropic_msg.get("content", []), _thinking_block_index):
                     block_type = block.get("type", "text")
                     write_sse(self, "content_block_start", {
                         "type": "content_block_start",
@@ -3108,7 +3179,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         if not text_block_started:
                             write_sse(self, "content_block_start", {
                                 "type": "content_block_start",
-                                "index": 0,
+                                "index": _thinking_block_index,
                                 "content_block": {"type": "text", "text": ""},
                             })
                             text_block_started = True
@@ -3116,7 +3187,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         delta_count += 1
                         write_sse(self, "content_block_delta", {
                             "type": "content_block_delta",
-                            "index": 0,
+                            "index": _thinking_block_index,
                             "delta": {"type": "text_delta", "text": text},
                         })
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
@@ -3160,19 +3231,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 # Fallback recovered text - emit content_block events
                 write_sse(self, "content_block_start", {
                     "type": "content_block_start",
-                    "index": 0,
+                    "index": _thinking_block_index,
                     "content_block": {"type": "text", "text": ""},
                 })
                 text_block_started = True
                 write_sse(self, "content_block_delta", {
                     "type": "content_block_delta",
-                    "index": 0,
+                    "index": _thinking_block_index,
                     "delta": {"type": "text_delta", "text": output_text},
                 })
         if text_block_started and not text_block_stopped:
-            write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": 0})
+            write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index})
             text_block_stopped = True
-        next_index = 1 if text_block_started else 0
+        next_index = (1 if text_block_started else 0) + _thinking_block_index
         for offset, tool_call in enumerate(tool_calls):
             block_index = next_index + offset
             tool_id = tool_call.get("id") or f"toolu_proxy_{now_ms()}_{offset}"
@@ -3209,6 +3280,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             with open_upstream(upstream_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
                 raw_payload = response.read().decode("utf-8", errors="replace")
             payload = json.loads(raw_payload)
+            if thinking_requested(body): payload["_thinking_requested"] = True
             if isinstance(payload, dict) and payload.get("success") is False:
                 upstream_msg = payload.get("message", "") or payload.get("error", "") or json.dumps(payload, ensure_ascii=False)[:200]
                 log(f"upstream error model={model_config.model_id} message={upstream_msg}")
@@ -3237,6 +3309,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         except Exception as retry_exc:
                             log(f"WARNING non-stream retry failed model={model_config.model_id} error={retry_exc}")
                 if converted.get("output"):
+                    if thinking_requested(body): converted["_thinking_requested"] = True
                     anthropic_msg = responses_json_to_anthropic_message(converted, model_config)
                     log(f"response done model={model_config.model_id} non_stream=true{usage_cache_debug(converted.get('usage'))}")
                     send_json(self, 200, anthropic_msg)
