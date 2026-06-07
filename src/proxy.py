@@ -722,6 +722,8 @@ def apply_auto_cache_control_to_chat_payload(payload: Dict[str, Any]) -> int:
     for index in sorted(stable_indexes):
         if index < 0 or index >= len(messages) or not isinstance(messages[index], dict):
             continue
+        if messages[index].get("role") == "tool":
+            continue
         if messages[index].get("content") is None:
             continue
         content, changed = mark_content_cache_boundary(messages[index].get("content"), "text")
@@ -758,8 +760,6 @@ def apply_auto_cache_control_to_responses_payload(payload: Dict[str, Any]) -> in
 def apply_auto_cache_control(payload: Dict[str, Any]) -> int:
     if not auto_cache_enabled() or has_cache_metadata(payload):
         return 0
-    if isinstance(payload.get("input"), (list, str)):
-        return apply_auto_cache_control_to_responses_payload(payload)
     if isinstance(payload.get("messages"), list):
         return apply_auto_cache_control_to_chat_payload(payload)
     return 0
@@ -778,6 +778,8 @@ def content_modalities(content: Any) -> set[str]:
         return found
     part_type = content.get("type")
     if isinstance(part_type, str):
+        if part_type == "image":
+            found.add("image")
         for modality, part_types in MODALITY_PART_TYPES.items():
             if part_type in part_types:
                 found.add(modality)
@@ -798,6 +800,8 @@ def direct_content_modalities(content: Any) -> set[str]:
         return set()
     if part_type in ("tool_use", "function_call"):
         return tool_modalities(content)
+    if part_type == "image":
+        return {"image"}
     found: set[str] = set()
     for modality, part_types in MODALITY_PART_TYPES.items():
         if part_type in part_types:
@@ -860,27 +864,27 @@ def sanitized_tool_choice_for_model(tool_choice: Any, tools: Any, model_config: 
     return {"type": "auto"} if tool_choice.get("name") not in allowed_names else tool_choice
 
 
+def placeholder_content_part(part: Dict[str, Any]) -> Dict[str, Any]:
+    text_type = "input_text" if part.get("type") in ("input_image", "input_audio", "input_video", "video_url") else "text"
+    return copy_cache_metadata(part, {"type": text_type, "text": UNSUPPORTED_MODALITY_PLACEHOLDER})
+
+
 def sanitized_content_for_model(content: Any, model_config: ModelConfig) -> Any:
     if isinstance(content, str) and unsupported_modalities(model_config, media_string_modalities(content)):
         return UNSUPPORTED_MODALITY_PLACEHOLDER
     if isinstance(content, list):
         sanitized: List[Any] = []
-        removed = False
         for part in content:
             if isinstance(part, dict) and unsupported_modalities(model_config, direct_content_modalities(part)):
-                removed = True
+                sanitized.append(placeholder_content_part(part))
                 continue
             sanitized_part = sanitized_content_for_model(part, model_config) if isinstance(part, dict) else part
-            if sanitized_part in ("", [], None):
-                removed = True
-                continue
-            sanitized.append(sanitized_part)
-        if removed and not sanitized:
-            return UNSUPPORTED_MODALITY_PLACEHOLDER
-        return sanitized
+            if sanitized_part not in ("", [], None):
+                sanitized.append(sanitized_part)
+        return sanitized or UNSUPPORTED_MODALITY_PLACEHOLDER
     if isinstance(content, dict):
         if unsupported_modalities(model_config, direct_content_modalities(content)):
-            return ""
+            return placeholder_content_part(content)
         sanitized = dict(content)
         if "content" in sanitized:
             sanitized["content"] = sanitized_content_for_model(sanitized.get("content"), model_config)
@@ -973,18 +977,15 @@ def sanitized_upstream_value_for_model(value: Any, model_config: ModelConfig) ->
         return UNSUPPORTED_MODALITY_PLACEHOLDER
     if isinstance(value, list):
         sanitized_items: List[Any] = []
-        removed = False
         for item in value:
             if isinstance(item, dict) and unsupported_modalities(model_config, direct_content_modalities(item)):
-                removed = True
+                sanitized_items.append(placeholder_content_part(item))
                 continue
             sanitized_items.append(sanitized_upstream_value_for_model(item, model_config))
-        if removed and not sanitized_items:
-            return [{"type": "text", "text": UNSUPPORTED_MODALITY_PLACEHOLDER}]
-        return sanitized_items
+        return sanitized_items or [{"type": "text", "text": UNSUPPORTED_MODALITY_PLACEHOLDER}]
     if isinstance(value, dict):
         if unsupported_modalities(model_config, direct_content_modalities(value)):
-            return ""
+            return placeholder_content_part(value)
         sanitized_dict = dict(value)
         if "content" in sanitized_dict:
             sanitized_dict["content"] = sanitized_upstream_value_for_model(sanitized_dict["content"], model_config)
@@ -1435,6 +1436,7 @@ def anthropic_messages_to_upstream(body: Dict[str, Any], model_config: ModelConf
 
 def responses_request_to_upstream(body: Dict[str, Any], fallback_model: str, upstream_model: Optional[str] = None, default_stream: bool = True) -> Dict[str, Any]:
     payload: Dict[str, Any] = copy.deepcopy(body)
+    payload.pop("_thinking_requested", None)
     payload["model"] = upstream_model or os.getenv("UPSTREAM_MODEL") or body.get("model") or fallback_model
     payload["stream"] = request_stream_enabled(body, default_stream)
     return payload
@@ -1624,7 +1626,7 @@ def responses_request_to_chat_completions(body: Dict[str, Any], fallback_model: 
     tools = [tool for tool in (responses_tool_to_chat_tool(item) for item in body.get("tools", [])) if tool]
     if tools:
         payload["tools"] = tools
-    if body.get("tool_choice") is not None and tools:
+    if body.get("tool_choice") is not None:
         payload["tool_choice"] = responses_tool_choice_to_chat(body["tool_choice"])
     # If messages contain tool_calls/tool role but payload has no tools definition,
     # upstream APIs (e.g. glm-chat) require a tools field to accept tool_calls messages.
@@ -1822,11 +1824,11 @@ def tool_arguments_json(arguments: Any) -> str:
     return json_dumps_compact(parse_tool_arguments(arguments))
 
 
-def codex_function_call_item(tool_call: Dict[str, Any], offset: int = 0) -> Dict[str, Any]:
+def codex_function_call_item(tool_call: Dict[str, Any], offset: int = 0, normalize_shell_aliases: bool = True) -> Dict[str, Any]:
     name = str(tool_call.get("name") or "tool")
     arguments = parse_tool_arguments(tool_call.get("arguments", ""))
     normalized_name = name
-    if name.lower() in ("shell_exec", "execute_command", "bash"):
+    if normalize_shell_aliases and name.lower() in ("shell_exec", "execute_command", "bash"):
         normalized_name = "shell"
     if normalized_name == "shell":
         command = arguments.get("command")
@@ -2051,6 +2053,34 @@ def merge_tool_call_payloads(tool_calls: List[Dict[str, Any]], parsed: Optional[
     merge_tool_call(tool_calls, parsed)
 
 
+def openai_tool_names(tools: Optional[List[Dict[str, Any]]]) -> List[str]:
+    names: List[str] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        name = tool.get("name")
+        if not name and isinstance(tool.get("function"), dict):
+            name = tool["function"].get("name")
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
+
+
+def normalize_tool_call_name_for_tools(tool_call: Dict[str, Any], tools: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    tool_names = openai_tool_names(tools)
+    if not tool_names:
+        return tool_call
+    name = str(tool_call.get("name") or "")
+    arguments = parse_tool_arguments(tool_call.get("arguments", ""))
+    preferred_shell = next((item for item in tool_names if item.lower() in ("bash", "shell", "exec", "run_command", "exec_command")), None)
+    normalized_name = best_tool_name(name, arguments, tool_names, preferred_shell)
+    if normalized_name == name:
+        return tool_call
+    updated = dict(tool_call)
+    updated["name"] = normalized_name
+    return updated
+
+
 def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input_tokens: int, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     if isinstance(payload.get("error"), dict):
         message = payload["error"].get("message") or json.dumps(payload["error"], ensure_ascii=False)
@@ -2067,7 +2097,7 @@ def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input
         output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
     parsed_tool_calls = chat_tool_call_payloads(message.get("tool_calls"), False) + pseudo_tool_calls
     for offset, tool_call in enumerate(parsed_tool_calls):
-        output.append(codex_function_call_item(tool_call, offset))
+        output.append(codex_function_call_item(normalize_tool_call_name_for_tools(tool_call, tools), offset, normalize_shell_aliases=False))
     response_payload = responses_completed_payload(response_id(), model, output, input_tokens, output_text)
     usage = payload.get("usage")
     if isinstance(usage, dict):
@@ -2102,6 +2132,20 @@ def inject_redacted_thinking_to_content(content: List[Dict[str, Any]]) -> List[D
     if any(block.get("type") in ("thinking", "redacted_thinking") for block in content):
         return content  # Already has thinking block from upstream
     return [{"type": "redacted_thinking", "data": _REDACTED_THINKING_DATA}] + content
+
+
+def inject_redacted_thinking_to_responses_output(output: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Prepend a redacted reasoning item to an OpenAI Responses output list."""
+    if any(isinstance(item, dict) and item.get("type") in ("reasoning", "redacted_thinking") for item in output):
+        return output
+    reasoning_item = {
+        "id": response_output_item_id(),
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [],
+        "encrypted_content": _REDACTED_THINKING_DATA,
+    }
+    return [reasoning_item] + output
 
 
 def emit_redacted_thinking_sse(handler: BaseHTTPRequestHandler, index: int = 0) -> None:
@@ -2375,13 +2419,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, anthropic_current_user_modalities(body))
             if unsupported:
-                message = unsupported_modalities_message(model_config, unsupported)
-                log(f"blocked unsupported modalities model={model_config.model_id} modalities={','.join(sorted(unsupported))} stream={stream}")
-                if stream:
-                    self.send_anthropic_text_stream(model_config, message, _thinking_requested=thinking_requested(body))
-                else:
-                    send_json(self, 200, anthropic_error_message_payload(model_config, message, estimate_anthropic_input_tokens(body)))
-                return
+                log(f"degraded unsupported modalities model={model_config.model_id} modalities={','.join(sorted(unsupported))} stream={stream}")
             body_for_upstream = sanitized_anthropic_body_for_model(body, model_config)
             body["_thinking_requested"] = body_for_upstream.get("_thinking_requested", False)
             if not auth_token:
@@ -2429,13 +2467,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, responses_current_user_modalities(body))
             if unsupported:
-                message = unsupported_modalities_message(model_config, unsupported)
-                log(f"blocked unsupported Responses modalities model={model_config.model_id} modalities={','.join(sorted(unsupported))} stream={stream}")
-                if stream:
-                    self.send_responses_text_stream(model_config, message, estimate_anthropic_input_tokens(body))
-                else:
-                    send_json(self, 200, responses_unsupported_modalities_payload(model_config, message, estimate_anthropic_input_tokens(body)))
-                return
+                log(f"degraded unsupported Responses modalities model={model_config.model_id} modalities={','.join(sorted(unsupported))} stream={stream}")
             body_for_upstream = sanitized_responses_body_for_model(body, model_config)
             body["_thinking_requested"] = body_for_upstream.get("_thinking_requested", False)
             if not auth_token:
@@ -2865,6 +2897,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             emit("response.function_call_arguments.done", {"item_id": item["id"], "output_index": output_index, "arguments": item["arguments"]})
             emit("response.output_item.done", {"output_index": output_index, "item": item})
             output.append(item)
+        if thinking_requested(body):
+            output = inject_redacted_thinking_to_responses_output(output)
         completed = responses_completed_payload(request_id, model_config.model_id, output, estimate_anthropic_input_tokens(body), output_text)
         if done_payload and isinstance(done_payload.get("response"), dict):
             completed["usage"] = done_payload["response"].get("usage") or completed["usage"]
@@ -2893,6 +2927,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     upstream_payload.get("tools") if isinstance(upstream_payload.get("tools"), list) else None,
                 )
                 if payload.get("output"):
+                    if thinking_requested(body):
+                        payload["output"] = inject_redacted_thinking_to_responses_output(payload["output"])
                     log(f"codex response done model={model_config.model_id} non_stream=true{usage_cache_debug(payload.get('usage'))}")
                     send_json(self, 200, payload)
                     return
@@ -2946,6 +2982,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     log(f"upstream error model={model_config.model_id} message={upstream_msg}")
                     send_json(self, 502, responses_error_payload(f"Upstream rejected: {upstream_msg}"))
                     return
+                if thinking_requested(body) and isinstance(payload.get("output"), list):
+                    payload["output"] = inject_redacted_thinking_to_responses_output(payload["output"])
                 log(f"codex response done model={model_config.model_id} non_stream=true{usage_cache_debug(payload.get('usage'))}")
                 send_json(self, 200, payload)
                 return
@@ -2990,6 +3028,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
         for offset, tool_call in enumerate(tool_calls):
             output.append(codex_function_call_item(tool_call, offset))
+        if thinking_requested(body):
+            output = inject_redacted_thinking_to_responses_output(output)
         payload = responses_completed_payload(response_id(), model_config.model_id, output, estimate_anthropic_input_tokens(body), output_text)
         if done_payload and isinstance(done_payload.get("response"), dict):
             payload["usage"] = done_payload["response"].get("usage") or payload["usage"]
@@ -3203,6 +3243,29 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as exc:
             message = upstream_error_message(exc)
             log(f"upstream http error model={model_config.model_id} status={exc.code} body={message[:500]}")
+            if model_config.api_format == "chat_completions" and not text_block_started and not tool_calls:
+                fallback_payload = dict(upstream_payload)
+                fallback_payload["stream"] = False
+                fallback_payload.pop("stream_options", None)
+                try:
+                    with open_upstream(fallback_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
+                        raw_payload = response.read().decode("utf-8", errors="replace")
+                    chat_json = json.loads(raw_payload)
+                    converted = chat_completion_json_to_responses(
+                        chat_json,
+                        model_config.model_id,
+                        estimate_value_tokens(body.get("messages")),
+                        fallback_payload.get("tools") if isinstance(fallback_payload.get("tools"), list) else None,
+                    )
+                    if converted.get("output"):
+                        if thinking_requested(body):
+                            converted["_thinking_requested"] = True
+                        anthropic_msg = responses_json_to_anthropic_message(converted, model_config)
+                        log(f"stream http error recovered via non-stream model={model_config.model_id}")
+                        self._emit_anthropic_message_as_stream(anthropic_msg, _thinking_block_index)
+                        return
+                except Exception as fallback_exc:
+                    log(f"stream http error non-stream fallback failed model={model_config.model_id} error={fallback_exc}")
             self._send_anthropic_stream_error(message, text_block_started, text_block_stopped)
             return
         except Exception as exc:
@@ -3270,6 +3333,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
             "usage": {"output_tokens": max(1, len(output_text) // 4) if output_text else 0},
         })
+        write_sse(self, "message_stop", {"type": "message_stop"})
+        self.close_connection = True
+
+    def _emit_anthropic_message_as_stream(self, anthropic_msg: Dict[str, Any], start_index: int = 0) -> None:
+        for block_index, block in enumerate(anthropic_msg.get("content", []), start_index):
+            block_type = block.get("type", "text") if isinstance(block, dict) else "text"
+            write_sse(self, "content_block_start", {"type": "content_block_start", "index": block_index, "content_block": block})
+            if block_type == "text" and block.get("text"):
+                write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "text_delta", "text": block["text"]}})
+            elif block_type == "tool_use":
+                write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "input_json_delta", "partial_json": json_dumps_compact(block.get("input", {}))}})
+            write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": block_index})
+        usage = anthropic_msg.get("usage", {}) if isinstance(anthropic_msg.get("usage"), dict) else {}
+        write_sse(self, "message_delta", {"type": "message_delta", "delta": {"stop_reason": anthropic_msg.get("stop_reason", "end_turn"), "stop_sequence": None}, "usage": {"output_tokens": usage.get("output_tokens", 0)}})
         write_sse(self, "message_stop", {"type": "message_stop"})
         self.close_connection = True
 

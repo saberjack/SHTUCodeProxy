@@ -1,3 +1,17 @@
+## v4.6.1 (2026-06-07)
+
+Text-only model multimodal fallback release.
+
+- Fixed Claude Code/Codex automatic image requests against text-only models such as GLM and DeepSeek: unsupported media blocks are now replaced with a text placeholder before forwarding upstream, avoiding HTTP500 failures.
+- Added regression coverage for current Claude Messages and Codex Responses image requests routed to text-only Chat Completions models.
+- Fixed Claude Code Read screenshot workflows where GLM native streaming could return upstream HTTP500; the proxy now retries that path with non-streaming Chat Completions and streams the recovered answer back to Claude Code.
+- Fixed Claude Code tool-name normalization so upstream `shell` calls are emitted as the actual available `Bash` tool when Claude Code exposes `Bash`.
+
+
+### Fixed
+
+- Responses thinking responses now include a synthetic reasoning item for Codex `/v1/responses` compatibility.
+- Responses-to-Chat conversion preserves `tool_choice` even when the request does not include an explicit `tools` array.
 ## v4.6.0 (2026-06-06)
 
 ### Fixed
@@ -569,6 +583,4 @@ Stable guided-setup release.
 - Moved advanced actions into a separate optional section.
 - Improved non-streaming and streaming upstream error reporting.
 - Updated the release zip with the latest Windows build.
-
-
 

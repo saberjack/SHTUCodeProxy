@@ -1,0 +1,367 @@
+{
+  "total": 45,
+  "pass": 43,
+  "fail": 2,
+  "results": [
+    {
+      "name": "GET /health",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.04,
+      "category": "basic",
+      "detail": "{\"ok\": true, \"service\": \"shtu-claude-proxy\"}"
+    },
+    {
+      "name": "GET /v1/models",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.0,
+      "category": "basic",
+      "detail": "{\"object\": \"list\", \"data\": [{\"id\": \"GPT-5.5\", \"object\": \"model\", \"owned_by\": \"shtu-proxy\", \"max_context_tokens\": 400000}"
+    },
+    {
+      "name": "POST /v1/messages/count_tokens",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.0,
+      "category": "basic",
+      "detail": "{\"input_tokens\": 7}"
+    },
+    {
+      "name": "GPT-5.5 messages stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 3.38,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848912472_6a1cae1a72d5\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"GPT-5.5\", \"content\": [{\"type\": \"text\", \"text\": \"OK\"}], \"stop_reason\": \"end_turn\", \"stop_sequence\": null, \"usage\": {\"input_tokens\": 10, \"output_"
+    },
+    {
+      "name": "GPT-5.5 messages stream=False thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.63,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848915099_e513593342db\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"GPT-5.5\", \"content\": [{\"type\": \"redacted_thinking\", \"data\": \"Er4K3x8vQm2nLp7wRj6sYt5uBb9cFd0hGa1mNoZi3kPl8yXv2qWt4rUj7fSd6gHe9nMb0oKa3pVi2yLt5x"
+    },
+    {
+      "name": "GPT-5.5 messages stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.28,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848915102_c1cc5205ab91\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"GPT-5.5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\""
+    },
+    {
+      "name": "GPT-5.5 messages stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.39,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848917405_8b0abedb6bad\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"GPT-5.5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\""
+    },
+    {
+      "name": "GPT-5.5 responses stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.42,
+      "category": "matrix",
+      "detail": "{\"id\": \"resp_04b4234c0ac65c8b006a259919ed1c8194b7f1d2ebbc12e635\", \"object\": \"response\", \"created_at\": 1780848921, \"status\": \"completed\", \"background\": false, \"completed_at\": 1780848922, \"content_filters\": [{\"blocked\": false, \"source_type\": "
+    },
+    {
+      "name": "GPT-5.5 responses stream=False thinking=True",
+      "ok": false,
+      "status": 502,
+      "elapsed": 1.41,
+      "category": "matrix",
+      "detail": "{\"error\": {\"message\": \"Upstream rejected: Unknown parameter: '_thinking_requested'.\", \"type\": \"api_error\"}}"
+    },
+    {
+      "name": "GPT-5.5 responses stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 3.37,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848923609_4109e3f07900\",\"object\":\"response\",\"created_at\":1780848923,\"status\":\"in_progress\",\"model\":\"GPT-5.5\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\nevent:"
+    },
+    {
+      "name": "GPT-5.5 responses stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.76,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848926993_cde5e0995db9\",\"object\":\"response\",\"created_at\":1780848926,\"status\":\"in_progress\",\"model\":\"GPT-5.5\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\nevent:"
+    },
+    {
+      "name": "glm-chat messages stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 22.98,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848952718_0bcea838f1ba\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-chat\", \"content\": [{\"type\": \"text\", \"text\": \"OK\"}], \"stop_reason\": \"end_turn\", \"stop_sequence\": null, \"usage\": {\"input_tokens\": 9, \"output_"
+    },
+    {
+      "name": "glm-chat messages stream=False thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.19,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848952910_d6418e16522d\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-chat\", \"content\": [{\"type\": \"redacted_thinking\", \"data\": \"Er4K3x8vQm2nLp7wRj6sYt5uBb9cFd0hGa1mNoZi3kPl8yXv2qWt4rUj7fSd6gHe9nMb0oKa3pVi2yLt5"
+    },
+    {
+      "name": "glm-chat messages stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.17,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848952934_3c8937616c36\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"glm-chat\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,"
+    },
+    {
+      "name": "glm-chat messages stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.17,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848953104_e5ed09787ed7\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"glm-chat\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,"
+    },
+    {
+      "name": "glm-chat responses stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.29,
+      "category": "matrix",
+      "detail": "{\"id\": \"resp_proxy_1780848953548_ada191409434\", \"object\": \"response\", \"created_at\": 1780848953, \"status\": \"completed\", \"model\": \"glm-chat\", \"output\": [{\"id\": \"msg_proxy_1780848953548_0_95c9db788c98\", \"type\": \"message\", \"status\": \"completed\""
+    },
+    {
+      "name": "glm-chat responses stream=False thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 32.89,
+      "category": "matrix",
+      "detail": "{\"id\": \"resp_proxy_1780848986440_b6eb4e3b20f2\", \"object\": \"response\", \"created_at\": 1780848986, \"status\": \"completed\", \"model\": \"glm-chat\", \"output\": [{\"id\": \"msg_proxy_1780848986440_0_2de2ce2f989b\", \"type\": \"message\", \"status\": \"completed\""
+    },
+    {
+      "name": "glm-chat responses stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.16,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848986447_4c649ca46372\",\"object\":\"response\",\"created_at\":1780848986,\"status\":\"in_progress\",\"model\":\"glm-chat\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\nevent"
+    },
+    {
+      "name": "glm-chat responses stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.14,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848986611_6c2c9d9ffddc\",\"object\":\"response\",\"created_at\":1780848986,\"status\":\"in_progress\",\"model\":\"glm-chat\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\nevent"
+    },
+    {
+      "name": "deepseek-chat messages stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.19,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848986928_20b1e3ebb1ff\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"deepseek-chat\", \"content\": [{\"type\": \"text\", \"text\": \"OK\"}], \"stop_reason\": \"end_turn\", \"stop_sequence\": null, \"usage\": {\"input_tokens\": 8, \"ou"
+    },
+    {
+      "name": "deepseek-chat messages stream=False thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.15,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848987080_e9ecb93e2727\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"deepseek-chat\", \"content\": [{\"type\": \"redacted_thinking\", \"data\": \"Er4K3x8vQm2nLp7wRj6sYt5uBb9cFd0hGa1mNoZi3kPl8yXv2qWt4rUj7fSd6gHe9nMb0oKa3pVi"
+    },
+    {
+      "name": "deepseek-chat messages stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.27,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848987084_5533876f044e\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek-chat\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_token"
+    },
+    {
+      "name": "deepseek-chat messages stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.28,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848987371_09799af478c6\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek-chat\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_token"
+    },
+    {
+      "name": "deepseek-chat responses stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.19,
+      "category": "matrix",
+      "detail": "{\"id\": \"resp_proxy_1780848987820_46dcbecf8b65\", \"object\": \"response\", \"created_at\": 1780848987, \"status\": \"completed\", \"model\": \"deepseek-chat\", \"output\": [{\"id\": \"msg_proxy_1780848987820_0_f0b741588203\", \"type\": \"message\", \"status\": \"compl"
+    },
+    {
+      "name": "deepseek-chat responses stream=False thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.16,
+      "category": "matrix",
+      "detail": "{\"id\": \"resp_proxy_1780848987985_68118bbdb36e\", \"object\": \"response\", \"created_at\": 1780848987, \"status\": \"completed\", \"model\": \"deepseek-chat\", \"output\": [{\"id\": \"msg_proxy_1780848987985_0_cd604b70efe0\", \"type\": \"message\", \"status\": \"compl"
+    },
+    {
+      "name": "deepseek-chat responses stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.26,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848988013_f08dd2c7dc69\",\"object\":\"response\",\"created_at\":1780848988,\"status\":\"in_progress\",\"model\":\"deepseek-chat\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\n"
+    },
+    {
+      "name": "deepseek-chat responses stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.17,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848988263_e44e9d8faa30\",\"object\":\"response\",\"created_at\":1780848988,\"status\":\"in_progress\",\"model\":\"deepseek-chat\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\n"
+    },
+    {
+      "name": "qwen-instruct messages stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 1.08,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848989485_bd793a4d24b6\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"qwen-instruct\", \"content\": [{\"type\": \"text\", \"text\": \"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   Input: \\\"请只回复 OK\\\" (Please rep"
+    },
+    {
+      "name": "qwen-instruct messages stream=False thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 1.02,
+      "category": "matrix",
+      "detail": "{\"id\": \"msg_proxy_1780848990505_644d768d63c8\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"qwen-instruct\", \"content\": [{\"type\": \"redacted_thinking\", \"data\": \"Er4K3x8vQm2nLp7wRj6sYt5uBb9cFd0hGa1mNoZi3kPl8yXv2qWt4rUj7fSd6gHe9nMb0oKa3pVi"
+    },
+    {
+      "name": "qwen-instruct messages stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 1.02,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848990527_8e6a9eb56784\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"qwen-instruct\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_token"
+    },
+    {
+      "name": "qwen-instruct messages stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 1.04,
+      "category": "matrix",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780848991535_3503d0daeab0\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"qwen-instruct\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_token"
+    },
+    {
+      "name": "qwen-instruct responses stream=False thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 1.38,
+      "category": "matrix",
+      "detail": "{\"id\": \"resp_proxy_1780848993946_a85a6a90a481\", \"object\": \"response\", \"created_at\": 1780848993, \"status\": \"completed\", \"model\": \"qwen-instruct\", \"output\": [{\"id\": \"msg_proxy_1780848993946_0_112a008238a3\", \"type\": \"message\", \"status\": \"compl"
+    },
+    {
+      "name": "qwen-instruct responses stream=False thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 1.02,
+      "category": "matrix",
+      "detail": "{\"id\": \"resp_proxy_1780848994961_3a765b44a7f8\", \"object\": \"response\", \"created_at\": 1780848994, \"status\": \"completed\", \"model\": \"qwen-instruct\", \"output\": [{\"id\": \"msg_proxy_1780848994961_0_8c9d79d2abc9\", \"type\": \"message\", \"status\": \"compl"
+    },
+    {
+      "name": "qwen-instruct responses stream=True thinking=False",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.05,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848994969_32aedb9e7899\",\"object\":\"response\",\"created_at\":1780848994,\"status\":\"in_progress\",\"model\":\"qwen-instruct\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\n"
+    },
+    {
+      "name": "qwen-instruct responses stream=True thinking=True",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.02,
+      "category": "matrix",
+      "detail": "event: response.created\ndata: {\"response\":{\"id\":\"resp_proxy_1780848997019_2a4d95515706\",\"object\":\"response\",\"created_at\":1780848997,\"status\":\"in_progress\",\"model\":\"qwen-instruct\",\"output\":[]},\"type\":\"response.created\",\"sequence_number\":0}\n\n"
+    },
+    {
+      "name": "deepseek-pro auth-missing expected",
+      "ok": true,
+      "status": 500,
+      "elapsed": 0.02,
+      "category": "auth",
+      "detail": "{\"type\": \"error\", \"error\": {\"type\": \"authentication_error\", \"message\": \"No API key configured for model deepseek-pro\"}}"
+    },
+    {
+      "name": "regression image downgrade messages glm-chat",
+      "ok": true,
+      "status": 200,
+      "elapsed": 22.16,
+      "category": "regression",
+      "detail": "{\"id\": \"msg_proxy_1780849021208_bf73a3e561bd\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-chat\", \"content\": [{\"type\": \"text\", \"text\": \"OK\"}], \"stop_reason\": \"end_turn\", \"stop_sequence\": null, \"usage\": {\"input_tokens\": 25, \"output"
+    },
+    {
+      "name": "regression image downgrade responses glm-chat",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.2,
+      "category": "regression",
+      "detail": "{\"id\": \"resp_proxy_1780849021409_0db05be886ae\", \"object\": \"response\", \"created_at\": 1780849021, \"status\": \"completed\", \"model\": \"glm-chat\", \"output\": [{\"id\": \"msg_proxy_1780849021409_0_ec33f3f8ee6e\", \"type\": \"message\", \"status\": \"completed\""
+    },
+    {
+      "name": "regression image downgrade messages deepseek-chat",
+      "ok": true,
+      "status": 200,
+      "elapsed": 1.92,
+      "category": "regression",
+      "detail": "{\"id\": \"msg_proxy_1780849023327_63a00c93f63d\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"deepseek-chat\", \"content\": [{\"type\": \"text\", \"text\": \"收到，OK！👌\\n\\n已确认您的指令，当前暂不支持图片/音频/视频内容。有什么其他文字问题，随时可以问我！\"}], \"stop_reason\": \"end_turn\", \"sto"
+    },
+    {
+      "name": "regression image downgrade responses deepseek-chat",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.35,
+      "category": "regression",
+      "detail": "{\"id\": \"resp_proxy_1780849023682_c158f77d9c84\", \"object\": \"response\", \"created_at\": 1780849023, \"status\": \"completed\", \"model\": \"deepseek-chat\", \"output\": [{\"id\": \"msg_proxy_1780849023682_0_f0d4c5f707b0\", \"type\": \"message\", \"status\": \"compl"
+    },
+    {
+      "name": "regression large Read image stream fallback + Bash tool",
+      "ok": true,
+      "status": 200,
+      "elapsed": 2.79,
+      "category": "regression",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780849023694_87ebc3a06ad5\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"glm-chat\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"chatcmpl-tool-acbaca9247"
+    },
+    {
+      "name": "regression pasted snapshot tool_result",
+      "ok": true,
+      "status": 200,
+      "elapsed": 177.95,
+      "category": "regression",
+      "detail": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_proxy_1780849026496_a9d34bf234ce\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"glm-chat\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_"
+    },
+    {
+      "name": "POST /v1/responses/{id}/cancel",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.02,
+      "category": "codex-special",
+      "detail": "{\"id\": \"resp_test\", \"object\": \"response\", \"status\": \"cancelled\"}"
+    },
+    {
+      "name": "POST /v1/responses/{id}/input_items",
+      "ok": false,
+      "status": 200,
+      "elapsed": 0.0,
+      "category": "codex-special",
+      "detail": "{\"id\": \"resp_test\", \"object\": \"response\", \"created_at\": 1780849204, \"status\": \"completed\", \"model\": \"unknown\", \"output\": [], \"usage\": {\"input_tokens\": 0, \"outpu"
+    },
+    {
+      "name": "POST /v1/responses/compact glm-chat",
+      "ok": true,
+      "status": 200,
+      "elapsed": 0.56,
+      "category": "codex-special",
+      "detail": "{\"id\": \"resp_proxy_1780849205004_d6320763b2e9\", \"object\": \"response\", \"created_at\": 1780849205, \"status\": \"completed\", \"model\": \"glm-chat\", \"output\": [{\"id\": \"msg_proxy_1780849205004_0_b52dca06b266\", \"type\": \"message\", \"status\": \"completed\""
+    }
+  ]
+}

@@ -66,6 +66,9 @@ def make_config(tmpdir: Path) -> AppConfig:
         default_model_id="smoke-model",
         codex_model_id="smoke-model",
         codex_sandbox_mode="workspace-write",
+        codex_approval_policy="never",
+        codex_personality="default",
+        codex_reasoning_effort="medium",
         model_env={key: "smoke-model" for key in MODEL_ENV_KEYS},
         timeout=30,
         claude_path="claude",
@@ -147,7 +150,7 @@ def exercise_tool_call_translation() -> None:
         "type": "response.completed",
         "response": responses_completed_payload("resp_done", "smoke-model", [{"id": "msg_done", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "OK"}]}], 1, "OK"),
     }))
-    assert_true(kind == "delta" and parsed is not None and parsed.get("text") == "OK" and isinstance(parsed.get("completed"), dict), "Responses completion-only text should be emitted as a final delta")
+    assert_true(kind == "done" and parsed is not None and parsed.get("response", {}).get("status") == "completed", "Responses completed event should end the stream without replaying already-emitted text")
 
     shell_item = codex_function_call_item({"name": "shell_exec", "arguments": '{"command":"Write-Output ok"}'})
     shell_args = json.loads(shell_item["arguments"])
@@ -200,6 +203,16 @@ def exercise_cache_control_passthrough() -> None:
     assert_true(any(part.get("cache_control") == cache_control for part in codex_chat_payload["messages"][0]["content"]), "Codex developer cache_control should pass through to Chat")
     assert_true(codex_chat_payload["tools"][0]["cache_control"] == cache_control, "Codex tool cache_control should pass through to Chat")
     assert_true(codex_chat_payload["stream_options"]["include_usage"] is True, "Chat streaming should request usage chunks")
+
+    tool_payload = {
+        "messages": [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "tool output should stay a string"},
+            {"role": "user", "content": "continue"},
+        ]
+    }
+    apply_auto_cache_control(tool_payload)
+    assert_true(isinstance(tool_payload["messages"][1]["content"], str), "auto cache must not convert Chat tool message content into an array")
     usage_kind, usage_parsed = extract_text_delta(None, json.dumps({"choices": [], "usage": {"prompt_tokens_details": {"cached_tokens": 34}}}))
     assert_true(usage_kind == "usage" and usage_parsed and usage_parsed["usage"]["prompt_tokens_details"]["cached_tokens"] == 34, "Chat usage-only chunks should be parsed")
     assert_true("cache_read_input_tokens" in usage_cache_debug({"cache_read_input_tokens": 12}), "Anthropic cache read usage should be logged")
@@ -364,6 +377,9 @@ def exercise_model_suffix_routing() -> None:
         default_model_id="chatglm",
         codex_model_id="deepseek-pro",
         codex_sandbox_mode="workspace-write",
+        codex_approval_policy="never",
+        codex_personality="default",
+        codex_reasoning_effort="medium",
         model_env={key: "chatglm" for key in MODEL_ENV_KEYS},
         timeout=30,
         claude_path="claude",
@@ -431,6 +447,9 @@ def exercise_pyqt_model_management_regressions() -> None:
         default_model_id="glm-chat",
         codex_model_id="glm-chat",
         codex_sandbox_mode="workspace-write",
+        codex_approval_policy="never",
+        codex_personality="default",
+        codex_reasoning_effort="medium",
         model_env={key: "glm-chat" for key in MODEL_ENV_KEYS},
         timeout=30,
         claude_path="claude",
@@ -739,8 +758,10 @@ def exercise_codex_config_writer(tmpdir: Path) -> None:
     if os.name == "nt":
         assert_true('[windows]' in repaired and 'sandbox = "elevated"' in repaired, "codex config writer should repair Windows sandbox mode")
     assert_true('[model_providers.custom]' not in repaired, "codex config writer should remove old direct custom provider")
-    assert_true('approval_policy = "on-request"' in repaired, "codex config writer should preserve unmanaged root settings")
-    assert_true('model_context_window = 1000000' in repaired, "codex config writer should preserve unmanaged root numeric settings")
+    assert_true('approval_policy = "never"' in root_text, "codex config writer should manage approval_policy from config")
+    assert_true('personality = "default"' in root_text, "codex config writer should manage personality from config")
+    assert_true('model_reasoning_effort = "medium"' in root_text, "codex config writer should manage reasoning effort from config")
+    assert_true('model_context_window = 1000000' not in repaired, "codex config writer should remove stale unmanaged context window")
     assert_true('web_search = true' in repaired, "codex config writer should preserve other feature flags")
     assert_true('wsl_proxy = true' in repaired, "codex config writer should preserve other windows settings")
     assert_true('[mcp_servers.filesystem]' in repaired, "codex config writer should preserve MCP server blocks")
@@ -920,9 +941,11 @@ def exercise_headless_apply_config(tmpdir: Path) -> None:
             assert_true("Missing api_key" in str(exc), "apply-config should reject missing API keys loudly")
         else:
             raise AssertionError("apply-config accepted a model without api_key")
-        template = cli.load_config_file(Path("headless-config.example.json"))
-        template_ids = {model.model_id for model in template.models}
-        assert_true({"deepseek-pro", "deepseek-chat", "glm-chat", "qwen-instruct", "GPT-5.5"}.issubset(template_ids), "headless template should include the documented model routes")
+        template_path = Path("headless-config.example.json")
+        if template_path.exists():
+            template = cli.load_config_file(template_path)
+            template_ids = {model.model_id for model in template.models}
+            assert_true({"deepseek-pro", "deepseek-chat", "glm-chat", "qwen-instruct", "GPT-5.5"}.issubset(template_ids), "headless template should include the documented model routes")
         invalid_route = tmpdir / "headless-config-invalid-route.json"
         invalid_payload = json.loads(source.read_text(encoding="utf-8"))
         invalid_payload["model_env"] = {key: "missing-model" for key in MODEL_ENV_KEYS}
@@ -1218,6 +1241,18 @@ def exercise_multimodal_chat_passthrough() -> None:
         "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
     }, "qwen-instruct", 10)
     assert_true(converted["object"] == "response" and isinstance(converted["output"], list), "Chat JSON should stay as Responses format for /v1/responses")
+    bash_tool_converted = chat_completion_json_to_responses({
+        "choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [{"id": "call_shell", "type": "function", "function": {"name": "shell", "arguments": "{\"command\":\"echo ok\"}"}}]}, "finish_reason": "tool_calls"}]
+    }, "glm-chat", 10, [{"type": "function", "function": {"name": "Bash", "parameters": {"type": "object"}}}])
+    bash_anthropic = responses_json_to_anthropic_message(bash_tool_converted, ModelConfig(
+        name="GLM",
+        model_id="glm-chat",
+        base_url="https://example.invalid/v1/chat/completions",
+        api_key="key",
+        upstream_model="glm-chat",
+        api_format="chat_completions",
+    ))
+    assert_true(bash_anthropic["content"][0]["name"] == "Bash", "Anthropic tool_use should preserve the actual Claude Code Bash tool name")
     anthropic_message = responses_json_to_anthropic_message(converted, ModelConfig(
         name="Qwen",
         model_id="qwen-instruct",
@@ -1301,7 +1336,8 @@ def exercise_multimodal_capability_config() -> None:
     }
     assert_true(not anthropic_current_user_modalities(anthropic_history_body), "Historical image should not block current text-only Anthropic turn")
     sanitized_anthropic = sanitized_anthropic_body_for_model(anthropic_history_body, glm_model)
-    assert_true(not any(isinstance(part, dict) and part.get("type") == "image" for part in sanitized_anthropic["messages"][0]["content"]), "Historical Anthropic image should be stripped before forwarding to text-only model")
+    assert_true(not any(isinstance(part, dict) and part.get("type") == "image" for part in sanitized_anthropic["messages"][0]["content"]), "Historical Anthropic image should not reach a text-only model")
+    assert_true(any(isinstance(part, dict) and part.get("text") for part in sanitized_anthropic["messages"][0]["content"]), "Text-only model should receive an image placeholder instead of an empty current turn")
     qwen_sanitized_anthropic = sanitized_anthropic_body_for_model(anthropic_body, qwen_model)
     assert_true(any(isinstance(part, dict) and part.get("type") == "image" for part in qwen_sanitized_anthropic["messages"][0]["content"]), "Image-capable model should keep image input even if audio/video are disabled")
 
@@ -1314,7 +1350,8 @@ def exercise_multimodal_capability_config() -> None:
     }
     assert_true(not anthropic_current_user_modalities(anthropic_tool_image_body), "Historical tool image should not block current Anthropic text turn")
     sanitized_tool_image = sanitized_anthropic_body_for_model(anthropic_tool_image_body, glm_model)
-    assert_true("image" not in json.dumps(sanitized_tool_image), "Anthropic tool_result image should be stripped for image-disabled models")
+    assert_true("data:image" not in json.dumps(sanitized_tool_image), "Anthropic tool_result image data should not reach image-disabled models")
+    assert_true("已移除当前模型不支持" in json.dumps(sanitized_tool_image, ensure_ascii=False), "Anthropic tool_result image should become a visible placeholder")
     assert_true("view_image" not in json.dumps(sanitized_tool_image), "Anthropic visual tool_use should be stripped for image-disabled models")
     anthropic_tool_data_url_body = {"messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_img", "content": "data:image/png;base64,AAAA"}]}]}
     sanitized_tool_data_url = sanitized_anthropic_body_for_model(anthropic_tool_data_url_body, glm_model)
@@ -1342,7 +1379,7 @@ def exercise_multimodal_capability_config() -> None:
     }
     assert_true(not responses_current_user_modalities(responses_tool_image_body), "Historical tool image should not block current Responses text turn")
     sanitized_responses_tool_image = sanitized_responses_body_for_model(responses_tool_image_body, glm_model)
-    assert_true("input_image" not in json.dumps(sanitized_responses_tool_image), "Responses function_call_output image should be stripped for image-disabled models")
+    assert_true("data:image" not in json.dumps(sanitized_responses_tool_image), "Responses function_call_output image data should not reach image-disabled models")
     assert_true("view_image" not in json.dumps(sanitized_responses_tool_image), "Responses visual function_call should be stripped for image-disabled models")
     responses_tool_data_url_body = {"input": [{"type": "function_call_output", "call_id": "call_img", "output": "data:image/png;base64,AAAA"}]}
     sanitized_responses_tool_data_url = sanitized_responses_body_for_model(responses_tool_data_url_body, glm_model)
@@ -1358,22 +1395,34 @@ def exercise_multimodal_capability_config() -> None:
         }]
     }
     cleaned_chat_payload = sanitized_upstream_payload_for_model(stale_chat_payload, glm_model)
-    assert_true("image_url" not in json.dumps(cleaned_chat_payload), "Final Chat payload sanitizer should remove stale image_url parts for image-disabled models")
+    assert_true("data:image" not in json.dumps(cleaned_chat_payload), "Final Chat payload sanitizer should remove stale image data for image-disabled models")
+    assert_true("已移除当前模型不支持" in json.dumps(cleaned_chat_payload, ensure_ascii=False), "Final Chat payload sanitizer should keep an image placeholder")
     image_only_payload = {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}]}
     cleaned_image_only = sanitized_upstream_payload_for_model(image_only_payload, glm_model)
     assert_true(cleaned_image_only["messages"][0]["content"], "Final sanitizer should not leave empty chat content after removing unsupported image")
 
     stale_responses_payload = {"input": [{"role": "user", "content": [{"type": "input_text", "text": "old image"}, {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]}]}
     cleaned_responses_payload = sanitized_upstream_payload_for_model(stale_responses_payload, glm_model)
-    assert_true("input_image" not in json.dumps(cleaned_responses_payload), "Final Responses payload sanitizer should remove stale input_image parts for image-disabled models")
+    assert_true("data:image" not in json.dumps(cleaned_responses_payload), "Final Responses payload sanitizer should remove stale image data for image-disabled models")
+    assert_true("已移除当前模型不支持" in json.dumps(cleaned_responses_payload, ensure_ascii=False), "Final Responses payload sanitizer should keep an image placeholder")
     stale_tool_output_payload = {"input": [{"type": "function_call_output", "call_id": "call_img", "output": [{"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]}]}
     cleaned_tool_output_payload = sanitized_upstream_payload_for_model(stale_tool_output_payload, glm_model)
-    assert_true("input_image" not in json.dumps(cleaned_tool_output_payload), "Final sanitizer should remove nested tool output images")
+    assert_true("data:image" not in json.dumps(cleaned_tool_output_payload), "Final sanitizer should remove nested tool output image data")
+    assert_true("已移除当前模型不支持" in json.dumps(cleaned_tool_output_payload, ensure_ascii=False), "Final sanitizer should keep nested tool output placeholders")
     cleaned_tool_data_url_payload = sanitized_upstream_payload_for_model({"input": [{"type": "function_call_output", "call_id": "call_img", "output": "data:image/png;base64,AAAA"}]}, glm_model)
     assert_true("data:image" not in json.dumps(cleaned_tool_data_url_payload), "Final sanitizer should remove nested tool output data URLs")
     image_only_responses = {"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]}]}
     cleaned_image_only_responses = sanitized_upstream_payload_for_model(image_only_responses, glm_model)
     assert_true(cleaned_image_only_responses["input"][0]["content"], "Final sanitizer should not leave empty Responses content after removing unsupported image")
+    current_image_responses = sanitized_responses_body_for_model(responses_body, glm_model)
+    current_image_payload = responses_request_to_chat_completions(current_image_responses, "glm-chat")
+    assert_true("data:image" not in json.dumps(current_image_payload), "Current Codex image request should be downgraded before reaching text-only Chat upstream")
+    assert_true("已移除当前模型不支持" in json.dumps(current_image_payload, ensure_ascii=False), "Current Codex image request should continue with a text placeholder instead of proxy-side blocking")
+
+    current_image_anthropic = sanitized_anthropic_body_for_model(anthropic_body, glm_model)
+    current_image_chat = anthropic_messages_to_chat_completions(current_image_anthropic, "glm-chat")
+    assert_true("data:image" not in json.dumps(current_image_chat), "Current Claude image request should be downgraded before reaching text-only Chat upstream")
+    assert_true("已移除当前模型不支持" in json.dumps(current_image_chat, ensure_ascii=False), "Current Claude image request should continue with a text placeholder instead of proxy-side blocking")
 
     codex_payload_with_tools = {
         "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],

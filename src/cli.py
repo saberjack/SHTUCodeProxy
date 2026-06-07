@@ -245,8 +245,10 @@ def codex_preserved_config_block(existing: str, config: AppConfig = None) -> str
         if effective_sandbox_mode == "danger-full-access":
             windows_values["sandbox_private_desktop"] = True
         # Update context window based on current model capacity
-        codex_model_id = getattr(config, "codex_model_id", "") or config.default_model_id
-        selected_model = config.find_model(codex_model_id)
+        selected_model = None
+        if config is not None:
+            codex_model_id = getattr(config, "codex_model_id", "") or config.default_model_id
+            selected_model = config.find_model(codex_model_id)
         # model_context_window and model_auto_compact_token_limit are now root-level fields
         # Remove them from [windows] section if they were there before
         windows_values.pop("model_context_window", None)
