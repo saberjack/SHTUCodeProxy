@@ -848,18 +848,38 @@ Set-Location "C:\上海科技大学\脚本\shutucodeproxy"
 
 ## 六、完整发布清单
 
+### Release 产物清单（共 8 项）
+
+每个版本必须包含以下全部产物，缺一不可：
+
+| # | 产物 | 来源 | 说明 |
+|---|------|------|------|
+| 1 | `SHTUCodeProxy-v{版本}-windows-x64.exe` | `build_exe.ps1` 或本地 PyInstaller | 单文件 Windows GUI |
+| 2 | `SHTUCodeProxy-v{版本}-windows-x64.zip` | `build_exe.ps1` | 便携 Windows 文件夹包 |
+| 3 | `SHTUCodeProxy-v{版本}-source-linux-macos.zip` | `build_exe.ps1` | Linux/macOS 源码包 |
+| 4 | `SHA256SUMS.txt` | `build_exe.ps1` | 产物 SHA256 校验 |
+| 5 | `SHTUCodeProxy-v{版本}-linux-x86_64` | GitHub Actions Linux workflow | 单文件 Linux GUI |
+| 6 | `SHTUCodeProxy-v{版本}-linux-x86_64-python-launcher.tar.xz` | GitHub Actions Linux workflow | Linux GUI 目录包 |
+| 7 | `SHTUCodeProxy-v{版本}-linux-x86_64-headless-cli.zip` | GitHub Actions Linux workflow | Linux 无头 CLI 包 |
+| 8 | `shtucodeproxyctl-v{版本}-linux-x86_64` | GitHub Actions Linux workflow | Linux 单文件 CLI |
+
+> **v4.6.2 教训**：手动只构建了 onefile exe + source.zip，缺少 windows-x64.zip、source-linux-macos.zip 和 SHA256SUMS.txt。以后必须走 `build_exe.ps1` 全量构建或触发 Windows CI workflow。
+
+### 发布步骤清单
+
 | 步骤 | 命令/操作 | 验证 |
 |------|-----------|------|
 | 1. 代码修改 | `dev/` 分支开发 | 本地测试通过 |
 | 2. 更新 VERSION | 编辑 `VERSION` 文件 | 版本号正确 |
 | 3. 更新 CHANGELOG | 编辑 `docs/CHANGELOG.md` | 变更记录完整 |
-| 4. 本地构建 exe | `python -m PyInstaller {spec} --noconfirm` | `dist/` 下有新 exe |
+| 4. 全量构建 Windows 产物 | build/build_exe.ps1 | release/ 下有 exe + zip + source + SHA256 |
 | 5. 本地验证 | `python src/proxy.py --port 8090` | `/v1/models` 正常 |
 | 6. Git 提交推送 | `git add/commit/push` | 代码在 main |
 | 7. 创建 tag | `git tag -a v{版本} && git push origin v{版本}` | tag 存在 |
-| 8. 创建 Release | `gh release create v{版本} {exe}` | Release 页面可见 |
-| 9. 构建 Linux 包 | GitHub Actions 手动触发 | Linux 产物附加到 Release |
-| 10. 通知用户 | 分发新版本 exe | 用户更新部署 |
+| 8. 创建 Release | `gh release create v{版本} release/*` | Release 页面可见 |
+| 9. 构建 Linux 包 | `gh workflow run "Build Linux Release Asset" -f tag=v{版本}` | 4 个 Linux 产物附加 |
+| 10. 核对产物 | 对比上方 8 项清单 | 缺项补齐 |
+| 11. 通知用户 | 分发新版本 | 用户更新部署 |
 
 # Fix #001 记录
 
