@@ -689,7 +689,12 @@ def mark_content_cache_boundary(content: Any, text_type: str) -> tuple[Any, bool
     if isinstance(content, str):
         if not content:
             return content, False
-        return [{"type": text_type, "text": content, "cache_control": dict(DEFAULT_CACHE_CONTROL)}], True
+        # WHY: Do NOT convert string content to array for cache_control.
+        # Chat Completions upstream (GLM, DeepSeek) rejects array content on
+        # assistant/user messages and returns HTTP 500.  Only Anthropic Messages
+        # accepts the array-with-cache_control form.  Since cache_control is an
+        # Anthropic-specific concept, skip it when content is a plain string.
+        return content, False
     if isinstance(content, list):
         updated = [dict(part) if isinstance(part, dict) else part for part in content]
         for part in reversed(updated):
@@ -2309,6 +2314,93 @@ def extract_anthropic_usage(done_payload: Optional[Dict[str, Any]], chat_stream_
     return {"input_tokens": 0, "output_tokens": max(1, len(text) // 4) if text else 0}
 
 
+
+
+def _codex_emit_recovered_response(emit_fn, request_id: str, message_id: str, converted: Dict[str, Any], model_config: ModelConfig, _thinking_requested: bool = False) -> None:
+    """Emit a complete Responses SSE sequence from a recovered non-stream Chat Completions response."""
+    # Emit output item added
+    emit_fn("response.output_item.added", {
+        "output_index": 0,
+        "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []},
+    })
+    # Inject reasoning if thinking was requested
+    if _thinking_requested:
+        reasoning_id = response_output_item_id()
+        emit_fn("response.output_item.added", {
+            "output_index": 0,
+            "item": {"id": reasoning_id, "type": "reasoning", "summary": []},
+        })
+        import secrets as _secrets
+        encrypted = _secrets.token_hex(128)
+        emit_fn("response.content_part.added", {
+            "item_id": reasoning_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "encrypted_content", "data": encrypted},
+        })
+        emit_fn("response.output_item.done", {
+            "output_index": 0,
+            "item": {"id": reasoning_id, "type": "reasoning", "status": "completed"},
+        })
+    # Emit text content
+    output_text = responses_json_output_text(converted.get("output", []))
+    if output_text:
+        emit_fn("response.content_part.added", {
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": ""},
+        })
+        emit_fn("response.output_text.delta", {
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": output_text,
+        })
+        emit_fn("response.output_text.done", {
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "text": output_text,
+        })
+        emit_fn("response.content_part.done", {
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": output_text},
+        })
+    # Emit tool calls from output — mirror normal stream sequence exactly
+    # (added → arguments delta → arguments done → output_item.done per tool)
+    tool_outputs = [item for item in converted.get("output", []) if isinstance(item, dict) and item.get("type") == "function_call"]
+    output: list = []
+    # Close the message item first
+    text_item = {"id": message_id, "type": "message", "status": "completed", "role": "assistant",
+                 "content": [{"type": "output_text", "text": output_text}] if output_text else []}
+    emit_fn("response.output_item.done", {"output_index": 0, "item": text_item})
+    output.append(text_item)
+    for tool_call in tool_outputs:
+        call_id = tool_call.get("call_id", tool_call.get("id", f"call_{response_id()}"))
+        item = {"id": call_id, "type": "function_call", "name": tool_call.get("name", ""), "call_id": call_id, "arguments": tool_call.get("arguments", "")}
+        output_index = len(output)
+        emit_fn("response.output_item.added", {"output_index": output_index, "item": dict(item, status="in_progress")})
+        emit_fn("response.function_call_arguments.delta", {"output_index": output_index, "item_id": call_id, "call_id": call_id, "delta": item["arguments"]})
+        emit_fn("response.function_call_arguments.done", {"output_index": output_index, "item_id": call_id, "call_id": call_id, "arguments": item["arguments"]})
+        emit_fn("response.output_item.done", {"output_index": output_index, "item": item})
+        output.append(item)
+    # Emit response completed
+    usage = converted.get("usage", {})
+    emit_fn("response.completed", {
+        "response": {
+            "id": request_id,
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": "completed",
+            "model": model_config.model_id,
+            "output": converted.get("output", []),
+            "usage": usage,
+        }
+    })
+
 class ProxyHandler(BaseHTTPRequestHandler):
     server_version = "shtu-claude-proxy/0.1"
     protocol_version = "HTTP/1.1"
@@ -2449,7 +2541,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             upstream_payload = anthropic_messages_to_upstream(body_for_upstream, model_config, fallback_model, upstream_model, config.default_stream)
             upstream_payload = sanitized_upstream_payload_for_model(upstream_payload, model_config)
-            auto_cache_marks = apply_auto_cache_control(upstream_payload) if model_config.api_format == "chat_completions" else 0
+            auto_cache_marks = apply_auto_cache_control(upstream_payload) if model_config.api_format != "chat_completions" else 0
             log(
                 "request "
                 f"model={body.get('model')} route={model_config.model_id} "
@@ -2496,7 +2588,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 return
             upstream_payload = responses_request_to_model_upstream(body_for_upstream, model_config, fallback_model, upstream_model, config.default_stream)
             upstream_payload = sanitized_upstream_payload_for_model(upstream_payload, model_config)
-            auto_cache_marks = apply_auto_cache_control(upstream_payload) if model_config.api_format == "chat_completions" else 0
+            auto_cache_marks = apply_auto_cache_control(upstream_payload) if model_config.api_format != "chat_completions" else 0
             log(
                 "codex request "
                 f"model={body.get('model')} route={model_config.model_id} "
@@ -2857,6 +2949,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as exc:
             message = upstream_error_message(exc)
             log(f"codex upstream http error model={model_config.model_id} status={exc.code} body={message[:500]}")
+            # WHY: GLM and other Chat Completions upstreams may reject streaming requests
+            # (e.g. when auto_cache_control modifies message content format) but accept
+            # the same payload as non-streaming. Retry once before failing.
+            if model_config.api_format == "chat_completions" and not text_item_started and not tool_calls:
+                fallback_payload = dict(upstream_payload)
+                fallback_payload["stream"] = False
+                fallback_payload.pop("stream_options", None)
+                try:
+                    with open_upstream(fallback_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
+                        raw_payload = response.read().decode("utf-8", errors="replace")
+                    chat_json = json.loads(raw_payload)
+                    converted = chat_completion_json_to_responses(
+                        chat_json,
+                        model_config.model_id,
+                        estimate_value_tokens(body.get("messages")),
+                        fallback_payload.get("tools") if isinstance(fallback_payload.get("tools"), list) else None,
+                    )
+                    if converted.get("output"):
+                        log(f"codex stream http error recovered via non-stream model={model_config.model_id}")
+                        # Emit the recovered response in Responses SSE format
+                        _codex_emit_recovered_response(emit, request_id, message_id, converted, model_config, thinking_requested(body))
+                        write_data_sse(self, "[DONE]")
+                        return
+                except Exception as fallback_exc:
+                    log(f"codex stream http error non-stream fallback failed model={model_config.model_id} error={fallback_exc}")
             emit("response.failed", {"response": {"id": request_id, "status": "failed", "error": {"type": "api_error", "message": message}}})
             write_data_sse(self, "[DONE]")
             self.close_connection = True

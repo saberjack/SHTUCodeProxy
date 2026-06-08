@@ -1,3 +1,17 @@
+## v4.6.4 (2026-06-08)
+
+Chat Completions HTTP 500 fix release.
+
+### Fixed
+
+- **Fixed HTTP 500 from GLM/DeepSeek on `cache_control` fields**: `auto_cache_control` was incorrectly applied only when `api_format == "chat_completions"`, injecting Anthropic-specific `cache_control` fields into Chat Completions payloads. GLM and DeepSeek reject these unknown fields with HTTP 500. Now `cache_control` is only applied when `api_format != "chat_completions"` (i.e., Anthropic direct).
+
+- **Fixed `mark_content_cache_boundary` string-to-array conversion**: Previously converted plain string `content` to array form with `cache_control`, which Chat Completions upstreams reject. Now returns the string unchanged — `cache_control` is an Anthropic-only concept and should not alter Chat Completions message format.
+
+- **Added stream-to-non-stream fallback in Responses streaming handler**: When `handle_responses_streaming` catches an upstream HTTP 500 from a Chat Completions API, it now retries the same request with `stream=False` and emits the recovered response in Responses SSE format via `_codex_emit_recovered_response`. This prevents `response.failed` when GLM intermittently rejects streaming requests.
+
+- **Fixed `_codex_emit_recovered_response` incomplete SSE sequence**: Tool call items were missing `response.output_item.done` events and `output_index` was hardcoded incorrectly, causing Claude Code to ignore recovered tool calls. Now mirrors the normal stream sequence exactly: added → arguments delta → arguments done → output_item.done per tool, with dynamically computed `output_index`.
+
 ## v4.6.3 (2026-06-08)
 
 Auto-update support release.
