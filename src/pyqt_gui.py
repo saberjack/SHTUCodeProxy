@@ -869,12 +869,16 @@ class IosProxyApp(QMainWindow):
         self.supports_audio_check.setObjectName("model_supports_audio_check")
         self.supports_video_check = QCheckBox("Video")
         self.supports_video_check.setObjectName("model_supports_video_check")
+        self.supports_reasoning_check = QCheckBox("Reasoning")
+        self.supports_reasoning_check.setObjectName("model_supports_reasoning_check")
+        self.supports_reasoning_check.setToolTip("Enable thinking/reasoning mode for models that support it")
         self.modality_checks = QWidget()
         modality_layout = QHBoxLayout(self.modality_checks)
         modality_layout.setContentsMargins(0, 0, 0, 0)
         modality_layout.addWidget(self.supports_image_check)
         modality_layout.addWidget(self.supports_audio_check)
         modality_layout.addWidget(self.supports_video_check)
+        modality_layout.addWidget(self.supports_reasoning_check)
         modality_layout.addStretch(1)
         for row, (label, widget) in enumerate((
             ("Display Name", self.name_edit),
@@ -1108,6 +1112,7 @@ class IosProxyApp(QMainWindow):
         self.supports_image_check.setChecked(bool(getattr(model, "supports_image", False)))
         self.supports_audio_check.setChecked(bool(getattr(model, "supports_audio", False)))
         self.supports_video_check.setChecked(bool(getattr(model, "supports_video", False)))
+        self.supports_reasoning_check.setChecked(bool(getattr(model, "supports_reasoning", False)))
 
     def on_api_format_changed(self, api_format: str) -> None:
         debug_log(f"api format changed value={api_format!r}")
@@ -1167,6 +1172,7 @@ class IosProxyApp(QMainWindow):
         old_model = self.config_data.models[self.selected_index]
         model.max_context_tokens = old_model.max_context_tokens
         model.stream_bridge = old_model.stream_bridge
+        model.supports_reasoning = self.supports_reasoning_check.isChecked()
         if not model.model_id or not model.base_url:
             self.error("Missing value", "Model ID and Base URL are required.")
             return False
@@ -1652,7 +1658,7 @@ def run() -> int:
     # Use a longer timeout so the new exe doesn't immediately fail with
     # "already running" while the old process hasn't fully exited yet.
     _is_post_update = bool(os.environ.get("SHTUCODEPROXY_AUTO_START"))
-    _lock_timeout = 10.0 if _is_post_update else 0.2
+    _lock_timeout = 30.0 if _is_post_update else 0.2
     instance_lock = file_lock("gui-instance", timeout=_lock_timeout)
     try:
         instance_lock.__enter__()

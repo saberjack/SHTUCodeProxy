@@ -101,6 +101,7 @@ class ModelConfig:
     supports_video: bool = False
     stream_bridge: bool = False
     max_context_tokens: int = 0  # 0 means unknown/use global default
+    supports_reasoning: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelConfig":
@@ -119,6 +120,7 @@ class ModelConfig:
             supports_video=bool_from_config(data.get("supports_video"), False),
             stream_bridge=bool_from_config(data.get("stream_bridge"), "qwen" in f"{model_id} {upstream_model}".lower()),
             max_context_tokens=int(data.get("max_context_tokens") or data.get("max_tokens") or default_max_context_tokens(model_id, upstream_model)),
+            supports_reasoning=bool_from_config(data.get("supports_reasoning"), default_supports_reasoning(model_id, upstream_model)),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -134,12 +136,18 @@ class ModelConfig:
             "supports_video": self.supports_video,
             "stream_bridge": self.stream_bridge,
             "max_context_tokens": self.max_context_tokens,
+            "supports_reasoning": self.supports_reasoning,
         }
 
 
 def default_supports_image(model_id: Any, upstream_model: Any = None) -> bool:
     model_text = f"{model_id or ''} {upstream_model or ''}".lower()
     return "gpt-5.5" in model_text or "qwen-instruct" in model_text
+
+
+def default_supports_reasoning(model_id: Any, upstream_model: Any = None) -> bool:
+    model_text = f"{model_id or '' } {upstream_model or '' }".lower()
+    return "deepseek-pro" in model_text or "glm" in model_text
 
 
 def default_max_context_tokens(model_id: Any, upstream_model: Any = None) -> int:

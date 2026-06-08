@@ -913,6 +913,10 @@ def sanitized_anthropic_body_for_model(body: Dict[str, Any], model_config: Model
         sanitized["_thinking_requested"] = True
     # Strip "thinking" ? no upstream API supports it; causes 400 errors on non-Anthropic models
     sanitized.pop("thinking", None)
+    # WHY: When model supports reasoning and thinking was requested, flag it so the
+    # upstream payload builder can inject chat_template_kwargs for vLLM models.
+    if sanitized.get("_thinking_requested") and getattr(model_config, 'supports_reasoning', False):
+        sanitized["_reasoning_enabled"] = True
     sanitized["tools"] = filter_tools_for_model(body.get("tools"), model_config)
     sanitized["tool_choice"] = sanitized_tool_choice_for_model(body.get("tool_choice"), body.get("tools"), model_config)
     removed_tool_ids: set[str] = set()
@@ -948,6 +952,10 @@ def sanitized_responses_body_for_model(body: Dict[str, Any], model_config: Model
         sanitized["_thinking_requested"] = True
     # Strip "thinking" ? no upstream API supports it; causes 400 errors on non-Anthropic models
     sanitized.pop("thinking", None)
+    # WHY: When model supports reasoning and thinking was requested, flag it so the
+    # upstream payload builder can inject chat_template_kwargs for vLLM models.
+    if sanitized.get("_thinking_requested") and getattr(model_config, 'supports_reasoning', False):
+        sanitized["_reasoning_enabled"] = True
     sanitized["tools"] = filter_tools_for_model(body.get("tools"), model_config)
     sanitized["tool_choice"] = sanitized_tool_choice_for_model(body.get("tool_choice"), body.get("tools"), model_config)
     input_items = body.get("input")
@@ -1028,6 +1036,10 @@ def sanitized_upstream_payload_for_model(payload: Dict[str, Any], model_config: 
     # Leaving it in causes empty streams (GPT-5.5 responses) or errors.
     if isinstance(result, dict):
         result = _strip_cache_control(result)
+    # WHY: When model supports reasoning and thinking was requested, inject
+    # chat_template_kwargs so vLLM-based upstreams enable reasoning mode.
+    if isinstance(result, dict) and result.pop("_reasoning_enabled", False):
+        result["chat_template_kwargs"] = {"enable_thinking": True}
     return result
 
 
@@ -1477,6 +1489,11 @@ def anthropic_messages_to_chat_completions(body: Dict[str, Any], fallback_model:
                 {"type": "function", "function": {"name": name, "description": f"Execute {name}", "parameters": {"type": "object", "properties": {}}}}
                 for name in sorted(message_tool_names)
             ]
+    # WHY: Preserve reasoning flag for sanitized_upstream_payload_for_model
+    if body.get("_reasoning_enabled"):
+        payload["_reasoning_enabled"] = True
+    if body.get("_thinking_requested"):
+        payload["_thinking_requested"] = True
     return payload
 
 
@@ -1696,6 +1713,11 @@ def responses_request_to_chat_completions(body: Dict[str, Any], fallback_model: 
                 {"type": "function", "function": {"name": name, "description": f"Execute {name}", "parameters": {"type": "object", "properties": {}}}}
                 for name in sorted(message_tool_names)
             ]
+    # WHY: Preserve reasoning flag for sanitized_upstream_payload_for_model
+    if body.get("_reasoning_enabled"):
+        payload["_reasoning_enabled"] = True
+    if body.get("_thinking_requested"):
+        payload["_thinking_requested"] = True
     return payload
 
 
@@ -1859,14 +1881,14 @@ def extract_text_delta(event: Optional[str], data: str) -> Tuple[str, Optional[D
         tool_calls = delta.get("tool_calls") if is_delta else message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
             return tool_call_kind_from_payloads(chat_tool_call_payloads(tool_calls, is_delta), is_delta)
-        # WHY: Some models (e.g. qwen-instruct) send reasoning content in
-        # delta.reasoning instead of delta.content. Return reasoning
-        # directly as text - do NOT wrap in think tags or it gets
+        # WHY: Some models (e.g. GLM, DeepSeek Pro) send reasoning content in
+        # delta.reasoning_content or delta.reasoning instead of delta.content.
+        # Return as separate "reasoning" kind so it can be emitted as an
+        # Anthropic thinking block instead of plain text.
+        reasoning = (delta.get("reasoning_content") if delta else None) or (delta.get("reasoning") if delta else None) or ""
+        if reasoning:
+            return "reasoning", {"text": reasoning}
         text = (delta.get("content") if delta else None) or ""
-        if not text:
-            reasoning = (delta.get("reasoning") if delta else None) or ""
-            if reasoning:
-                text = reasoning
         if text:
             return "delta", {"text": text}
         if choice.get("finish_reason"):
@@ -2172,9 +2194,17 @@ def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input
         raise ValueError(f"Upstream response missing choices: {json.dumps(payload, ensure_ascii=False)[:1000]}")
     choice = choices[0] if isinstance(choices[0], dict) else {}
     message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
-    output_text = message.get("content") or message.get("reasoning_content") or message.get("reasoning") or ""
+    # WHY: When upstream returns reasoning_content (e.g. GLM, DeepSeek Pro),
+    # convert it to a reasoning output item so Codex/Claude Code can display
+    # it as collapsible thinking instead of mixing it with output text.
+    reasoning_text = message.get("reasoning_content") or message.get("reasoning") or ""
+    output_text = message.get("content") or ""
+    if not output_text and not reasoning_text:
+        output_text = ""
     output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, tools)
     output: List[Dict[str, Any]] = []
+    if reasoning_text:
+        output.append({"id": response_output_item_id(), "type": "reasoning", "status": "completed", "summary": [{"type": "summary_text", "text": reasoning_text}]})
     if output_text:
         output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
     parsed_tool_calls = chat_tool_call_payloads(message.get("tool_calls"), False) + pseudo_tool_calls
@@ -2196,6 +2226,7 @@ def anthropic_message_id() -> str:
 # inject a synthetic redacted_thinking block so Claude Code recognizes
 # the model as supporting extended thinking (enables auto mode).
 _REDACTED_THINKING_DATA = "c2h0dWNvZGVwcm94eV90aGlua2luZ19ibG9ja192MQ=="
+_THINKING_PLACEHOLDER_TEXT = "Thinking..."
 
 def thinking_requested(body: Dict[str, Any]) -> bool:
     """Check if the original request asked for extended thinking."""
@@ -2213,7 +2244,7 @@ def inject_redacted_thinking_to_content(content: List[Dict[str, Any]]) -> List[D
     """
     if any(block.get("type") in ("thinking", "redacted_thinking") for block in content):
         return content  # Already has thinking block from upstream
-    return [{"type": "redacted_thinking", "data": _REDACTED_THINKING_DATA}] + content
+    return [{"type": "thinking", "thinking": _THINKING_PLACEHOLDER_TEXT}] + content
 
 
 def inject_redacted_thinking_to_responses_output(output: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2224,8 +2255,7 @@ def inject_redacted_thinking_to_responses_output(output: List[Dict[str, Any]]) -
         "id": response_output_item_id(),
         "type": "reasoning",
         "status": "completed",
-        "summary": [],
-        "encrypted_content": _REDACTED_THINKING_DATA,
+        "summary": [{"type": "summary_text", "text": _THINKING_PLACEHOLDER_TEXT}],
     }
     return [reasoning_item] + output
 
@@ -2240,9 +2270,13 @@ def emit_redacted_thinking_sse(handler: BaseHTTPRequestHandler, index: int = 0) 
     write_sse(handler, "content_block_start", {
         "type": "content_block_start",
         "index": index,
-        "content_block": {"type": "redacted_thinking", "data": _REDACTED_THINKING_DATA},
+        "content_block": {"type": "thinking", "thinking": ""},
     })
-    # No delta needed for redacted_thinking - the data is in the start event
+    write_sse(handler, "content_block_delta", {
+        "type": "content_block_delta",
+        "index": index,
+        "delta": {"type": "thinking_delta", "thinking": _THINKING_PLACEHOLDER_TEXT},
+    })
     write_sse(handler, "content_block_stop", {
         "type": "content_block_stop",
         "index": index,
@@ -2341,21 +2375,39 @@ def responses_json_output_text(output: List[Dict[str, Any]]) -> str:
 def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: ModelConfig) -> Dict[str, Any]:
     output = payload.get("output") if isinstance(payload.get("output"), list) else []
     content: List[Dict[str, Any]] = []
-    output_text = responses_json_output_text(output)
-    if output_text:
-        content.append({"type": "text", "text": output_text})
+    # WHY: Extract reasoning from output items and convert to thinking blocks
+    # for Claude Code compatibility. Real reasoning content becomes a visible
+    # thinking block; if no reasoning but thinking was requested, inject
+    # redacted_thinking as fallback.
+    has_real_thinking = False
     for item in output:
-        if isinstance(item, dict) and item.get("type") == "function_call":
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "reasoning":
+            summary = item.get("summary") if isinstance(item.get("summary"), list) else []
+            reasoning_text = ""
+            for part in summary:
+                if isinstance(part, dict) and part.get("type") == "summary_text" and part.get("text"):
+                    reasoning_text += part["text"]
+            if reasoning_text:
+                content.append({"type": "thinking", "thinking": reasoning_text})
+                has_real_thinking = True
+            continue
+        if item.get("type") == "function_call":
             content.append({
                 "type": "tool_use",
                 "id": item.get("call_id") or item.get("id") or f"toolu_proxy_{now_ms()}_{uuid.uuid4().hex[:8]}",
                 "name": item.get("name") or "tool",
                 "input": parse_tool_arguments(item.get("arguments", "")),
             })
+    output_text = responses_json_output_text(output)
+    if output_text:
+        content.append({"type": "text", "text": output_text})
     if not content:
         content.append({"type": "text", "text": ""})
-    # WHY: If original request asked for thinking, inject redacted_thinking block
-    if thinking_requested(payload):
+    # WHY: If original request asked for thinking but no real thinking content
+    # was found, inject redacted_thinking as fallback
+    if thinking_requested(payload) and not has_real_thinking:
         content = inject_redacted_thinking_to_content(content)
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     return {
@@ -2403,17 +2455,11 @@ def _codex_emit_recovered_response(emit_fn, request_id: str, message_id: str, co
     # Inject reasoning if thinking was requested
     if _thinking_requested:
         reasoning_id = response_output_item_id()
+        # WHY: Use summary_text instead of encrypted_content for synthetic reasoning.
+        # encrypted_content with random hex data causes garbled output in Claude Code.
         emit_fn("response.output_item.added", {
             "output_index": 0,
-            "item": {"id": reasoning_id, "type": "reasoning", "summary": []},
-        })
-        import secrets as _secrets
-        encrypted = _secrets.token_hex(128)
-        emit_fn("response.content_part.added", {
-            "item_id": reasoning_id,
-            "output_index": 0,
-            "content_index": 0,
-            "part": {"type": "encrypted_content", "data": encrypted},
+            "item": {"id": reasoning_id, "type": "reasoning", "summary": [{"type": "summary_text", "text": _THINKING_PLACEHOLDER_TEXT}]},
         })
         emit_fn("response.output_item.done", {
             "output_index": 0,
@@ -2932,12 +2978,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
         request_id = response_id()
         message_id = response_output_item_id()
         output_text_parts: List[str] = []
+        reasoning_parts: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
         thinking_state: Dict[str, Any] = {"in_thinking": False}
         chat_stream_usage: Optional[Dict[str, Any]] = None
         done_payload: Optional[Dict[str, Any]] = None
         sequence_number = 0
         text_item_started = False
+        reasoning_item_started = False
+        reasoning_item_id = ""
         send_sse_headers(self)
 
         def emit(event_type: str, payload: Dict[str, Any]) -> None:
@@ -3011,6 +3060,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
                                 emit("response.output_item.added", {"output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
                                 emit("response.content_part.added", {"item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})
                             emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": text})
+                    elif kind == "reasoning" and parsed:
+                        # WHY: When upstream model returns reasoning_content (e.g. GLM, DeepSeek Pro),
+                        # emit it as a reasoning output item in the Responses API format so Codex
+                        # displays it as collapsible thinking content.
+                        reasoning_text = parsed.get("text", "")
+                        if reasoning_text:
+                            reasoning_parts.append(reasoning_text)
+                            if not reasoning_item_started:
+                                reasoning_item_started = True
+                                reasoning_item_id = response_output_item_id(1)
+                                emit("response.output_item.added", {"output_index": 0, "item": {"id": reasoning_item_id, "type": "reasoning", "status": "in_progress", "summary": []}})
+                            emit("response.reasoning_summary_text.delta", {"item_id": reasoning_item_id, "output_index": 0, "delta": reasoning_text})
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
                     elif kind == "text_done" and parsed and parsed.get("text"):
@@ -3106,6 +3167,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         output: List[Dict[str, Any]] = []
+        # WHY: If we received reasoning content during streaming, add the completed
+        # reasoning item to the output before the text message item.
+        reasoning_text_joined = "".join(reasoning_parts)
+        if reasoning_text_joined:
+            if reasoning_item_started:
+                emit("response.reasoning_summary_text.done", {"item_id": reasoning_item_id, "output_index": 0, "text": reasoning_text_joined})
+            reasoning_item = {"id": reasoning_item_id if reasoning_item_started else response_output_item_id(1), "type": "reasoning", "status": "completed", "summary": [{"type": "summary_text", "text": reasoning_text_joined}]}
+            emit("response.output_item.done", {"output_index": 0, "item": reasoning_item})
+            output.append(reasoning_item)
         if output_text:
             if not text_item_started:
                 emit("response.output_item.added", {"output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
@@ -3251,6 +3321,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
         output_text = "".join(text_parts)
         output: List[Dict[str, Any]] = []
+        # WHY: If we received reasoning content during streaming, add the completed
+        # reasoning item to the output before the text message item.
+        reasoning_text_joined = "".join(reasoning_parts)
+        if reasoning_text_joined:
+            if reasoning_item_started:
+                emit("response.reasoning_summary_text.done", {"item_id": reasoning_item_id, "output_index": 0, "text": reasoning_text_joined})
+            reasoning_item = {"id": reasoning_item_id if reasoning_item_started else response_output_item_id(1), "type": "reasoning", "status": "completed", "summary": [{"type": "summary_text", "text": reasoning_text_joined}]}
+            emit("response.output_item.done", {"output_index": 0, "item": reasoning_item})
+            output.append(reasoning_item)
         if output_text:
             output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
         for offset, tool_call in enumerate(tool_calls):
@@ -3307,16 +3386,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
         })
 
 
-        # WHY: If client requested thinking, inject redacted_thinking block before other content
+        # WHY: If client requested thinking and model does NOT support native reasoning,
+        # inject a synthetic redacted_thinking block so Claude Code recognizes extended thinking.
+        # If model DOES support reasoning, skip pre-injection so the real thinking block
+        # from upstream reasoning_content can be emitted instead.
         _thinking_block_index = 0
-        if thinking_requested(body):
+        _model_supports_reasoning = getattr(model_config, 'supports_reasoning', False)
+        if thinking_requested(body) and not _model_supports_reasoning:
             emit_redacted_thinking_sse(self, index=0)
             _thinking_block_index = 1
 
         output_text_parts: List[str] = []
+        reasoning_parts: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
         delta_count = 0
         text_block_started = False
+        thinking_block_started = False
         text_block_stopped = False
         done_payload: Optional[Dict[str, Any]] = None
         chat_stream_usage: Optional[Dict[str, Any]] = None
@@ -3435,6 +3520,27 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             "index": _thinking_block_index,
                             "delta": {"type": "text_delta", "text": text},
                         })
+                    elif kind == "reasoning" and parsed:
+                        # WHY: When upstream model returns reasoning_content (e.g. GLM, DeepSeek Pro),
+                        # emit it as an Anthropic thinking block so Claude Code displays it properly
+                        # as collapsible reasoning instead of mixing it with output text.
+                        reasoning_text = parsed.get("text", "")
+                        if reasoning_text:
+                            reasoning_parts.append(reasoning_text)
+                            if not thinking_block_started:
+                                # Close redacted_thinking if we emitted one, then start thinking block
+                                thinking_block_started = True
+                                write_sse(self, "content_block_start", {
+                                    "type": "content_block_start",
+                                    "index": _thinking_block_index,
+                                    "content_block": {"type": "thinking", "thinking": ""},
+                                })
+                                _thinking_block_index += 1
+                            write_sse(self, "content_block_delta", {
+                                "type": "content_block_delta",
+                                "index": _thinking_block_index - 1,
+                                "delta": {"type": "thinking_delta", "thinking": reasoning_text},
+                            })
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
                     elif kind == "text_done" and parsed and parsed.get("text"):
@@ -3552,6 +3658,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "index": _thinking_block_index,
                     "delta": {"type": "text_delta", "text": output_text},
                 })
+        # WHY: Close the thinking block if it was started during streaming
+        if thinking_block_started:
+            write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index - 1})
+            thinking_block_started = False
         if text_block_started and not text_block_stopped:
             write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index})
             text_block_stopped = True
@@ -3588,11 +3698,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _emit_anthropic_message_as_stream(self, anthropic_msg: Dict[str, Any], start_index: int = 0) -> None:
         for block_index, block in enumerate(anthropic_msg.get("content", []), start_index):
             block_type = block.get("type", "text") if isinstance(block, dict) else "text"
-            write_sse(self, "content_block_start", {"type": "content_block_start", "index": block_index, "content_block": block})
-            if block_type == "text" and block.get("text"):
-                write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "text_delta", "text": block["text"]}})
-            elif block_type == "tool_use":
-                write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "input_json_delta", "partial_json": json_dumps_compact(block.get("input", {}))}})
+            if block_type == "thinking":
+                # WHY: Anthropic protocol requires thinking blocks to have empty thinking
+                # in content_block_start, then thinking_delta events for the actual content.
+                # Putting full text in content_block_start causes Claude Code to display
+                # raw thinking text as garbled output.
+                thinking_text = block.get("thinking", "")
+                write_sse(self, "content_block_start", {"type": "content_block_start", "index": block_index, "content_block": {"type": "thinking", "thinking": ""}})
+                if thinking_text:
+                    write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "thinking_delta", "thinking": thinking_text}})
+            else:
+                write_sse(self, "content_block_start", {"type": "content_block_start", "index": block_index, "content_block": block})
+                if block_type == "text" and block.get("text"):
+                    write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "text_delta", "text": block["text"]}})
+                elif block_type == "tool_use":
+                    write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "input_json_delta", "partial_json": json_dumps_compact(block.get("input", {}))}})
             write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": block_index})
         usage = anthropic_msg.get("usage", {}) if isinstance(anthropic_msg.get("usage"), dict) else {}
         write_sse(self, "message_delta", {"type": "message_delta", "delta": {"stop_reason": anthropic_msg.get("stop_reason", "end_turn"), "stop_sequence": None}, "usage": {"output_tokens": usage.get("output_tokens", 0)}})

@@ -180,7 +180,22 @@ def apply_update(
                     pass
             return False, f"Cannot copy new exe to {exe}: {e}"
 
-        # Step 4: Start the new exe with cleanup flag
+        # Step 4: Remove the GUI instance lock so the new process can acquire it
+        # WHY: The old process may still be shutting down when the new one starts.
+        # The lock file blocks the new process with "already running" error.
+        # Since we are the same user and we are about to exit, it is safe to
+        # remove the lock file now.
+        try:
+            from safe_io import file_lock
+            from tempfile import gettempdir
+            from pathlib import Path as _P
+            lock_file = _P(gettempdir()) / "SHTUCodeProxy" / "gui-instance.lock"
+            if lock_file.exists():
+                lock_file.unlink()
+        except Exception:
+            pass
+
+        # Step 5: Start the new exe with cleanup flag
         cmd = [str(exe)]
         if restart_proxy:
             cmd.append("--start-proxy")
@@ -191,6 +206,7 @@ def apply_update(
             DETACHED = 0x00000008
             subprocess.Popen(
                 cmd,
+                env=dict(os.environ, SHTUCODEPROXY_AUTO_START="1"),
                 creationflags=DETACHED | subprocess.CREATE_NEW_PROCESS_GROUP,
                 close_fds=True,
                 stdout=subprocess.DEVNULL,
