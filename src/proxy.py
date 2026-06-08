@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Minimal Anthropic Messages -> OpenAI Responses streaming proxy for Claude Code.
 
@@ -1746,8 +1746,31 @@ def extract_text_delta(event: Optional[str], data: str) -> Tuple[str, Optional[D
         return "delta", {"text": obj.get("delta", "")}
     if event_type == "response.output_text.done":
         return "text_done", {"text": obj.get("text", "")}
+    # WHY: GPT-5.5 and other models send reasoning summary as separate events.
+    # Treat reasoning_summary_text.delta like output_text.delta so the content
+    # reaches the client instead of being silently dropped as kind=ignore.
+    if event_type == "response.reasoning_summary_text.delta":
+        return "delta", {"text": obj.get("delta", "")}
+    if event_type == "response.reasoning_summary_text.done":
+        return "text_done", {"text": obj.get("text", "")}
     if event_type in ("response.output_item.added", "response.output_item.done"):
         item = obj.get("item") if isinstance(obj.get("item"), dict) else obj
+        # WHY: response.output_item.done for message items contains the full
+        # accumulated text. When incremental deltas were missed (e.g. upstream
+        # skipped response.output_text.delta), this serves as a fallback to
+        # recover the response text instead of returning empty.
+        if event_type == "response.output_item.done" and item.get("type") == "message":
+            msg_content = item.get("content") if isinstance(item.get("content"), list) else []
+            for part in msg_content:
+                if isinstance(part, dict) and part.get("type") == "output_text" and part.get("text"):
+                    return "text_done", {"text": part["text"]}
+        # WHY: When upstream sends a reasoning item (e.g. GPT-5.5), extract
+        # its summary text as a fallback so reasoning content is not lost.
+        if event_type == "response.output_item.done" and item.get("type") == "reasoning":
+            summary = item.get("summary") if isinstance(item.get("summary"), list) else []
+            for part in summary:
+                if isinstance(part, dict) and part.get("type") == "summary_text" and part.get("text"):
+                    return "text_done", {"text": part["text"]}
         if item.get("type") == "function_call":
             return "tool_call", {
                 "id": item.get("call_id") or item.get("id") or f"toolu_proxy_{now_ms()}",
@@ -1789,7 +1812,14 @@ def extract_text_delta(event: Optional[str], data: str) -> Tuple[str, Optional[D
         tool_calls = delta.get("tool_calls") if is_delta else message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
             return tool_call_kind_from_payloads(chat_tool_call_payloads(tool_calls, is_delta), is_delta)
+        # WHY: Some models (e.g. qwen-instruct) send reasoning content in
+        # delta.reasoning instead of delta.content. Return reasoning
+        # directly as text - do NOT wrap in think tags or it gets
         text = (delta.get("content") if delta else None) or ""
+        if not text:
+            reasoning = (delta.get("reasoning") if delta else None) or ""
+            if reasoning:
+                text = reasoning
         if text:
             return "delta", {"text": text}
         if choice.get("finish_reason"):
@@ -2936,6 +2966,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": text})
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
+                    elif kind == "text_done" and parsed and parsed.get("text"):
+                        # WHY: If no incremental deltas were received but the stream
+                        # provides complete text via text_done, use it as a fallback.
+                        if not output_text_parts and not text_item_started:
+                            fallback_text = filter_thinking_text_delta(parsed["text"], thinking_state)
+                            if fallback_text:
+                                output_text_parts.append(fallback_text)
+                                text_item_started = True
+                                emit("response.output_item.added", {"output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
+                                emit("response.content_part.added", {"item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})
+                                emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": fallback_text})
                     elif kind == "usage" and parsed and isinstance(parsed.get("usage"), dict):
                         chat_stream_usage = parsed["usage"]
                     elif kind == "error":
@@ -2986,6 +3027,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         output_text = "".join(output_text_parts)
+
         output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, body.get("tools"))
         if pseudo_tool_calls:
             for pseudo_tool_call in pseudo_tool_calls:
@@ -3198,29 +3240,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
         write_sse(self, "message_stop", {"type": "message_stop"})
         self.close_connection = True
 
-    def _send_anthropic_stream_error(self, error_message: str, text_block_started: bool, text_block_stopped: bool) -> None:
-        """Send an error as a proper Anthropic SSE stream ending sequence instead of a non-standard error event."""
-        if not text_block_started:
-            write_sse(self, "content_block_start", {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {"type": "text", "text": ""},
-            })
-            text_block_started = True
-        if not text_block_stopped:
-            write_sse(self, "content_block_delta", {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": f"[Proxy Error] {error_message}"},
-            })
-            write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": 0})
-        write_sse(self, "message_delta", {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {"output_tokens": 0},
-        })
-        write_sse(self, "message_stop", {"type": "message_stop"})
-        self.close_connection = True
 
     def handle_streaming(self, body: Dict[str, Any], upstream_payload: Dict[str, Any], auth_token: str, upstream_url: str, timeout: int, model_config: ModelConfig) -> None:
         message_id = anthropic_message_id()
@@ -3370,6 +3389,27 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         })
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
+                    elif kind == "text_done" and parsed and parsed.get("text"):
+                        # WHY: If no incremental deltas were received but the stream
+                        # provides the complete text via text_done (e.g. from
+                        # response.output_item.done or response.output_text.done),
+                        # use it as a fallback delta to avoid empty responses.
+                        if not output_text_parts and not text_block_started:
+                            fallback_text = filter_thinking_text_delta(parsed["text"], thinking_state)
+                            if fallback_text:
+                                write_sse(self, "content_block_start", {
+                                    "type": "content_block_start",
+                                    "index": _thinking_block_index,
+                                    "content_block": {"type": "text", "text": ""},
+                                })
+                                text_block_started = True
+                                output_text_parts.append(fallback_text)
+                                delta_count += 1
+                                write_sse(self, "content_block_delta", {
+                                    "type": "content_block_delta",
+                                    "index": _thinking_block_index,
+                                    "delta": {"type": "text_delta", "text": fallback_text},
+                                })
                     elif kind == "usage" and parsed and isinstance(parsed.get("usage"), dict):
                         chat_stream_usage = parsed["usage"]
                     elif kind == "error":
@@ -3417,7 +3457,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             for pseudo_tool_call in pseudo_tool_calls:
                 merge_tool_call_payloads(tool_calls, pseudo_tool_call)
         if not output_text and not tool_calls:
-            # Fallback: extract text from done_payload if stream deltas were empty
+            # WHY: When upstream returns 200 but stream deltas contain no text
+            # (e.g. upstream skipped incremental events, or all deltas were
+            # filtered by filter_thinking_text_delta), retry with a non-streaming
+            # request to recover the response, mirroring the Codex fallback logic.
+            # Step 1: Try extracting from done_payload first (cheaper, no new request)
             if isinstance(done_payload, dict):
                 response_obj = done_payload.get("response") if isinstance(done_payload.get("response"), dict) else done_payload
                 fallback_output = response_obj.get("output") if isinstance(response_obj, dict) else None
@@ -3427,6 +3471,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     fallback_choices = done_payload.get("raw", {}).get("choices") if isinstance(done_payload.get("raw"), dict) else None
                     if isinstance(fallback_choices, list) and fallback_choices:
                         output_text = fallback_choices[0].get("message", {}).get("content", "") if isinstance(fallback_choices[0], dict) else ""
+            # Step 2: If done_payload extraction failed, re-issue as non-streaming
+            if not output_text:
+                retry_payload = dict(upstream_payload)
+                retry_payload["stream"] = False
+                retry_payload.pop("stream_options", None)
+                try:
+                    with open_upstream(retry_payload, auth_token, upstream_url, timeout, model_config.api_format) as retry_resp:
+                        raw_retry = retry_resp.read().decode("utf-8", errors="replace")
+                    retry_json = json.loads(raw_retry)
+                    output_text = response_text_from_upstream_json(retry_json)
+                    if not output_text and model_config.api_format == "chat_completions" and isinstance(retry_json.get("choices"), list):
+                        converted = chat_completion_json_to_responses(
+                            retry_json, model_config.model_id,
+                            estimate_anthropic_input_tokens(body),
+                            retry_payload.get("tools") if isinstance(retry_payload.get("tools"), list) else None,
+                        )
+                        output_text = responses_json_output_text(converted.get("output", []))
+                except Exception as retry_exc:
+                    log(f"anthropic stream non-stream retry failed model={model_config.model_id} error={retry_exc}")
             log(f"anthropic empty stream fallback model={model_config.model_id} chars={len(output_text)}")
             if output_text and not text_block_started:
                 # Fallback recovered text - emit content_block events
