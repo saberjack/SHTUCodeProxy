@@ -2,7 +2,7 @@
 
 > 项目目录: C:\上海科技大学\脚本\shutucodeproxy
 > GitHub: https://github.com/saberjack/SHTUCodeProxy
-> 当前版本: v4.5.1
+> 当前版本: v4.6.2
 
 ## 项目概述
 
@@ -695,6 +695,167 @@ app.py
 1. 更新 `secrets/api-keys.json`
 2. 运行 `python -c "import json; s=json.load(open('secrets/api-keys.json')); c=json.load(open('src/config.json')); km={mid:i['api_key'] for mid,i in s['models'].items()}; [m.__setitem__('api_key',km[m['model_id']]) for m in c['models'] if m['model_id'] in km]; json.dump(c,open('src/config.json','w'),indent=2,ensure_ascii=False)"`
 3. 重启代理生效
+
+
+# 发布流程（GitHub Release）
+
+> 以下为从代码修改到 GitHub 发布的完整流程，所有版本发布必须严格遵守。
+
+## 一、发布前准备
+
+1. 确认所有代码修改已在 `dev/` 分支完成并通过验证
+2. 更新 `VERSION` 文件为新版本号（如 `4.6.3`）
+3. 更新 `docs/CHANGELOG.md` 记录变更内容
+4. 在 `docs/ISSUE-TRACKER.md` 中更新相关问题状态
+
+## 二、本地构建 Windows 包
+
+```powershell
+Set-Location "C:\上海科技大学\脚本\shutucodeproxy"
+
+# 更新 spec 文件版本号
+# 将 SHTUCodeProxy.spec 或 SHTUCodeProxy-v{旧版本}-windows-x64.spec 复制为新版本
+# 替换其中的 name 和 version 引用
+
+# PyInstaller 构建（Windows onefile 模式）
+python -m PyInstaller "SHTUCodeProxy-v{版本}-windows-x64.spec" --noconfirm
+
+# 构建产物位于 dist/ 目录：
+#   dist/SHTUCodeProxy-v{版本}-windows-x64.exe
+```
+
+### spec 文件说明
+
+- 位置：项目根目录 `SHTUCodeProxy-v{版本}-windows-x64.spec`
+- 从上一版本 spec 复制，修改版本号即可
+- 使用 `--onefile` 模式，所有 Python 源码嵌入单个 exe
+- 依赖：`app.py`（入口）+ `src/` 下所有 `.py` 文件 + `VERSION` + `docs/headless-config.example.json`
+
+### 本地测试（不干扰生产）
+
+```powershell
+# 在非生产端口启动测试代理
+python src/proxy.py --port 8090
+
+# 验证 /v1/models 端点
+python -c "import urllib.request,json; print(json.dumps(json.loads(urllib.request.urlopen('http://127.0.0.1:8090/v1/models').read()),indent=2,ensure_ascii=False))"
+
+# 测试完成后关闭测试进程
+```
+
+## 三、Git 提交与标签
+
+```powershell
+Set-Location "C:\上海科技大学\脚本\shutucodeproxy"
+
+# 创建开发分支
+git checkout -b dev/feat-{简短描述}
+
+# 提交代码
+git add VERSION src/config_store.py src/proxy.py  # 按实际修改的文件
+git commit -m "v{版本}: {简短描述}"
+
+# 推送分支
+git push origin dev/feat-{简短描述}
+
+# 合并到 main
+git checkout main
+git merge dev/feat-{简短描述}
+git push origin main
+
+# 创建标签
+git tag -a v{版本} -m "v{版本}: {简要说明}"
+git push origin v{版本}
+```
+
+## 四、GitHub Release 创建
+
+```powershell
+Set-Location "C:\上海科技大学\脚本\shutucodeproxy"
+
+# 使用 gh CLI（需先 gh auth login）
+gh release create v{版本} `
+  "dist\SHTUCodeProxy-v{版本}-windows-x64.exe" `
+  --title "v{版本} - {发布标题}" `
+  --notes "## v{版本} - {发布标题}
+
+### 问题
+{问题描述}
+
+### 修复
+{修复说明}
+
+### 兼容性
+- Codex CLI 不受影响
+- Claude Code Desktop {影响说明}
+- 所有现有配置向后兼容"
+```
+
+### gh CLI 首次配置
+
+```powershell
+# 安装（如未安装）
+winget install --id GitHub.cli
+
+# 登录（浏览器授权）
+& "C:\Program Files\GitHub CLI\gh.exe" auth login
+
+# 验证
+& "C:\Program Files\GitHub CLI\gh.exe" auth status
+```
+
+### 注意事项
+
+- **git credential fill 会挂起**：不要用 `git credential fill` 获取 token，直接用 `gh auth login` 浏览器授权
+- **PowerShell 中 gh 报错**：gh 的 stderr 输出被 PowerShell 当作错误，实际命令可能已成功，检查 exit code
+- **Release 已存在**：如果 tag 推送时自动创建了空 release，用 `gh release delete v{版本} --yes` 删除后重建
+
+## 五、GitHub Actions 构建 Linux 包
+
+项目配置了两个 GitHub Actions 工作流：
+
+### Linux 构建（手动触发）
+
+- 工作流：`.github/workflows/build-linux-release.yml`
+- 触发方式：GitHub Actions 页面手动 `workflow_dispatch`
+- 输入参数：
+  - `tag`：Release 标签（如 `v4.6.2`）
+  - `ref`：构建的 Git 引用（默认 `main`）
+- 构建产物：
+  - `SHTUCodeProxy-v{版本}-linux-x86_64-python-launcher.tar.xz`（GUI 目录包）
+  - `SHTUCodeProxy-v{版本}-linux-x86_64-headless-cli.zip`（无头 CLI 包）
+  - `SHTUCodeProxy-v{版本}-linux-x86_64`（单文件 GUI）
+  - `shtucodeproxyctl-v{版本}-linux-x86_64`（单文件 CLI）
+- 所有产物自动上传到对应 tag 的 Release
+
+### 触发步骤
+
+1. 在浏览器打开 https://github.com/saberjack/SHTUCodeProxy/actions
+2. 选择 "Build Linux Release Asset" 工作流
+3. 点击 "Run workflow"
+4. 输入 tag（如 `v4.6.2`）和 ref（默认 `main`）
+5. 等待构建完成，产物自动附加到 Release
+
+### Windows 构建（可选 CI）
+
+- 工作流：`.github/workflows/release-windows.yml`
+- 触发方式：推送 `v*` 标签自动触发，或手动 `workflow_dispatch`
+- 如需本地构建则无需此工作流
+
+## 六、完整发布清单
+
+| 步骤 | 命令/操作 | 验证 |
+|------|-----------|------|
+| 1. 代码修改 | `dev/` 分支开发 | 本地测试通过 |
+| 2. 更新 VERSION | 编辑 `VERSION` 文件 | 版本号正确 |
+| 3. 更新 CHANGELOG | 编辑 `docs/CHANGELOG.md` | 变更记录完整 |
+| 4. 本地构建 exe | `python -m PyInstaller {spec} --noconfirm` | `dist/` 下有新 exe |
+| 5. 本地验证 | `python src/proxy.py --port 8090` | `/v1/models` 正常 |
+| 6. Git 提交推送 | `git add/commit/push` | 代码在 main |
+| 7. 创建 tag | `git tag -a v{版本} && git push origin v{版本}` | tag 存在 |
+| 8. 创建 Release | `gh release create v{版本} {exe}` | Release 页面可见 |
+| 9. 构建 Linux 包 | GitHub Actions 手动触发 | Linux 产物附加到 Release |
+| 10. 通知用户 | 分发新版本 exe | 用户更新部署 |
 
 # Fix #001 记录
 
