@@ -3494,7 +3494,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def handle_streaming(self, body: Dict[str, Any], upstream_payload: Dict[str, Any], auth_token: str, upstream_url: str, timeout: int, model_config: ModelConfig) -> None:
         message_id = anthropic_message_id()
-        model = model_config.model_id
+        model = body.get("model", model_config.model_id)  # WHY: Use original model name from request so Claude Code CLI recognizes it and enables streaming rendering
         send_sse_headers(self)
         write_sse(self, "message_start", {
             "type": "message_start",
@@ -3506,7 +3506,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "usage": {"input_tokens": estimate_anthropic_input_tokens(body), "output_tokens": 0},
             },
         })
 
@@ -3651,6 +3651,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             })
                             output_text_parts.append("\n````\n\n")
                         if not text_block_started:
+                            # WHY: Close thinking block before starting text block.
+                            # Anthropic SSE requires blocks to be properly nested:
+                            # content_block_start -> deltas -> content_block_stop
+                            # before the next content_block_start.
+                            if thinking_block_started:
+                                write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index - 1})
+                                thinking_block_started = False
                             write_sse(self, "content_block_start", {
                                 "type": "content_block_start",
                                 "index": _thinking_block_index,
@@ -3672,7 +3679,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             # When client did NOT request thinking, emit reasoning as regular
                             # text so it is not silently dropped (e.g. qwen-instruct, glm-chat
                             # with enable_thinking return all content in reasoning).
-                            _use_as_text = True  # WHY: Always emit reasoning as text (with 🤔 prefix) so all clients can see it
+                            _use_as_text = not thinking_requested(body)  # WHY: When client requests thinking, emit as thinking block so Claude Code renders it incrementally; otherwise emit as text with 🤔 prefix
                             if _use_as_text:
                                 # WHY: Prepend 🤔 marker to reasoning so users can distinguish
                                 # thinking from the actual answer in any client
@@ -3832,6 +3839,28 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "index": _thinking_block_index,
                     "delta": {"type": "text_delta", "text": output_text},
                 })
+        # WHY: When thinking was requested but upstream only returned reasoning with no
+        # actual text content, the response would have only thinking blocks and no text.
+        # Claude Code CLI's reactive compact counts text blocks as "assistant messages"
+        # and reports "no assistant message in summarization response" if none exist.
+        # Emit reasoning as a text block so compact and other CLI features can work.
+        if not text_block_started and reasoning_parts and thinking_requested(body):
+            reasoning_text = "".join(reasoning_parts)
+            if thinking_block_started:
+                write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index - 1})
+                thinking_block_started = False
+            write_sse(self, "content_block_start", {
+                "type": "content_block_start",
+                "index": _thinking_block_index,
+                "content_block": {"type": "text", "text": ""},
+            })
+            text_block_started = True
+            output_text_parts.append(reasoning_text)
+            write_sse(self, "content_block_delta", {
+                "type": "content_block_delta",
+                "index": _thinking_block_index,
+                "delta": {"type": "text_delta", "text": reasoning_text},
+            })
         # WHY: Close the thinking block if it was started during streaming
         if thinking_block_started:
             write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index - 1})
@@ -3872,7 +3901,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         write_sse(self, "message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": {"output_tokens": max(1, len(output_text) // 4) if output_text else 0},
+            "usage": {"input_tokens": estimate_anthropic_input_tokens(body), "output_tokens": max(1, len(output_text) // 4) if output_text else 0},
         })
         write_sse(self, "message_stop", {"type": "message_stop"})
         self.close_connection = True
