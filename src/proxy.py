@@ -2420,7 +2420,7 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
     # redacted_thinking as fallback.
     has_real_thinking = False
     _reasoning_as_text_fallback = ""
-    _wants_thinking = thinking_requested(payload)
+    _wants_thinking = thinking_requested(payload) or getattr(model_config, 'supports_reasoning', False) or getattr(model_config, 'enable_thinking', False)
     for item in output:
         if not isinstance(item, dict):
             continue
@@ -2703,6 +2703,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream_model = os.getenv("UPSTREAM_MODEL") or model_config.upstream_model
             auth_token = os.getenv("UPSTREAM_API_KEY") or model_config.api_key or os.getenv("ANTHROPIC_AUTH_TOKEN") or ""
             timeout = int(os.getenv("UPSTREAM_TIMEOUT", str(config.timeout)))
+            # WHY: When model has Thinking enabled but client didn't send thinking param,
+            # inject it so the proxy treats the request as if thinking was requested.
+            # This ensures reasoning content is emitted as thinking blocks (collapsible
+            # in Claude Code / Codex) instead of plain text.
+            if not isinstance(body.get("thinking"), dict) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+                body["thinking"] = {"type": "enabled"}
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, anthropic_current_user_modalities(body))
             if unsupported:
@@ -2751,6 +2757,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream_model = os.getenv("UPSTREAM_MODEL") or model_config.upstream_model
             auth_token = os.getenv("UPSTREAM_API_KEY") or model_config.api_key or os.getenv("ANTHROPIC_AUTH_TOKEN") or ""
             timeout = int(os.getenv("UPSTREAM_TIMEOUT", str(config.timeout)))
+            # WHY: When model has Thinking enabled but client didn't send thinking param,
+            # inject it so reasoning content is emitted as reasoning items (collapsible
+            # in Codex) instead of plain text.
+            if not isinstance(body.get("thinking"), dict) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+                body["thinking"] = {"type": "enabled"}
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, responses_current_user_modalities(body))
             if unsupported:
@@ -3118,7 +3129,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             # WHY: When client did NOT request thinking, emit reasoning as
                             # regular text so it is not silently dropped (e.g. qwen-instruct,
                             # glm-chat with enable_thinking return all content in reasoning).
-                            _use_as_text = not thinking_requested(body)
+                            _use_as_text = not (thinking_requested(body) or getattr(model_config, 'supports_reasoning', False) or getattr(model_config, 'enable_thinking', False))
                             if _use_as_text:
                                 output_text_parts.append(reasoning_text)
                                 if not text_item_started:
@@ -3378,7 +3389,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     elif kind == "reasoning" and parsed:
                         reasoning_text = parsed.get("text", "")
                         if reasoning_text:
-                            _use_as_text = not thinking_requested(body)
+                            _use_as_text = not (thinking_requested(body) or getattr(model_config, 'supports_reasoning', False) or getattr(model_config, 'enable_thinking', False))
                             if _use_as_text:
                                 output_text_parts.append(reasoning_text)
                                 if not text_item_started:
@@ -3622,7 +3633,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             # When client did NOT request thinking, emit reasoning as regular
                             # text so it is not silently dropped (e.g. qwen-instruct, glm-chat
                             # with enable_thinking return all content in reasoning).
-                            _use_as_text = not thinking_requested(body)
+                            _use_as_text = not (thinking_requested(body) or getattr(model_config, 'supports_reasoning', False) or getattr(model_config, 'enable_thinking', False))
                             if _use_as_text:
                                 if not text_block_started:
                                     write_sse(self, "content_block_start", {
