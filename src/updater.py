@@ -102,7 +102,7 @@ def _platform_asset_pattern() -> Optional[str]:
     system = platform.system().lower()
     machine = platform.machine().lower()
     if system == "windows" and machine in ("amd64", "x86_64"):
-        return "-windows-x64.zip"
+        return "-windows-x64.exe"  # WHY: apply_update expects exe, not zip
     if system == "linux" and machine in ("x86_64", "amd64"):
         return "-linux-x86_64"
     # macOS or other architectures — not supported for auto-update yet
