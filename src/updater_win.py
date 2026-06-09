@@ -163,7 +163,7 @@ def apply_update(
                     pass
             return False, f"Cannot rename running exe: {e}"
 
-        # Step 3: Copy new exe to original path
+        # Step 3: Copy new exe and _internal directory to original location
         import shutil
         try:
             shutil.copy2(str(new_exe_path), str(exe))
@@ -179,6 +179,28 @@ def apply_update(
                 except Exception:
                     pass
             return False, f"Cannot copy new exe to {exe}: {e}"
+        # WHY: PyInstaller COLLECT mode requires the _internal directory
+        # next to the exe. When updating from a zip download, we need to
+        # copy the entire _internal directory as well.
+        new_internal = new_exe_path.parent / "_internal"
+        old_internal = exe.parent / "_internal"
+        if new_internal.is_dir():
+            try:
+                if old_internal.is_dir():
+                    # Remove old _internal but skip .old files (from previous update)
+                    for item in old_internal.iterdir():
+                        try:
+                            if item.is_dir():
+                                shutil.rmtree(str(item))
+                            else:
+                                item.unlink()
+                        except Exception:
+                            pass
+                shutil.copytree(str(new_internal), str(old_internal), dirs_exist_ok=True)
+            except Exception as e:
+                # Non-critical: exe is already updated, _internal copy failure
+                # may mean some features break but the app should still start
+                pass
 
         # Step 4: Remove the GUI instance lock so the new process can acquire it
         # WHY: The old process may still be shutting down when the new one starts.

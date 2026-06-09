@@ -102,7 +102,7 @@ def _platform_asset_pattern() -> Optional[str]:
     system = platform.system().lower()
     machine = platform.machine().lower()
     if system == "windows" and machine in ("amd64", "x86_64"):
-        return "-windows-x64.exe"
+        return "-windows-x64.zip"
     if system == "linux" and machine in ("x86_64", "amd64"):
         return "-linux-x86_64"
     # macOS or other architectures — not supported for auto-update yet
@@ -311,7 +311,7 @@ def check_for_update(*, force: bool = False) -> CheckResult:
     for asset in release.get("assets", []):
         name = asset.get("name", "")
         url = asset.get("browser_download_url", "")
-        if name.endswith(asset_pattern) and not name.endswith(".zip"):
+        if name.endswith(asset_pattern):
             download_url = url
             asset_name = name
         elif name == "SHA256SUMS.txt":

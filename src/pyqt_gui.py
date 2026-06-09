@@ -1499,11 +1499,32 @@ class IosProxyApp(QMainWindow):
         # Apply the update and restart the application.
         import platform as _pf
         from pathlib import Path
+        # WHY: If the downloaded file is a zip, extract it first to get the exe.
+        new_path = Path(new_exe_path)
+        if new_path.suffix.lower() == ".zip":
+            import zipfile
+            import tempfile
+            extract_dir = Path(tempfile.mkdtemp(prefix="SHTUCodeProxy-update-"))
+            try:
+                with zipfile.ZipFile(str(new_path), "r") as zf:
+                    zf.extractall(str(extract_dir))
+                # Find the exe inside the extracted directory
+                exe_candidates = list(extract_dir.rglob("SHTUCodeProxy.exe"))
+                if not exe_candidates:
+                    self.append_log("Update failed: No SHTUCodeProxy.exe found in zip archive")
+                    QMessageBox.warning(self, "Update Failed", "No SHTUCodeProxy.exe found in the downloaded zip archive.")
+                    return
+                new_path = exe_candidates[0]
+                self.append_log(f"Extracted update exe: {new_path}")
+            except Exception as e:
+                self.append_log(f"Update failed: Could not extract zip: {e}")
+                QMessageBox.warning(self, "Update Failed", f"Could not extract update zip:\n{e}")
+                return
         if _pf.system() == "Windows":
             from updater_win import apply_update
         else:
             from updater_linux import apply_update
-        success, err = apply_update(Path(new_exe_path), restart_proxy=True)
+        success, err = apply_update(new_path, restart_proxy=True)
         if not success:
             self.append_log(f"Update apply failed: {err}")
             QMessageBox.warning(self, "Update Failed", f"Could not apply update:\n{err}")
