@@ -180,27 +180,14 @@ def apply_update(
                     pass
             return False, f"Cannot copy new exe to {exe}: {e}"
         # WHY: PyInstaller COLLECT mode requires the _internal directory
-        # next to the exe. When updating from a zip download, we need to
-        # copy the entire _internal directory as well.
-        new_internal = new_exe_path.parent / "_internal"
-        old_internal = exe.parent / "_internal"
-        if new_internal.is_dir():
-            try:
-                if old_internal.is_dir():
-                    # Remove old _internal but skip .old files (from previous update)
-                    for item in old_internal.iterdir():
-                        try:
-                            if item.is_dir():
-                                shutil.rmtree(str(item))
-                            else:
-                                item.unlink()
-                        except Exception:
-                            pass
-                shutil.copytree(str(new_internal), str(old_internal), dirs_exist_ok=True)
-            except Exception as e:
-                # Non-critical: exe is already updated, _internal copy failure
-                # may mean some features break but the app should still start
-                pass
+        # next to the exe. We store the source path so cleanup_after_update
+        # can copy it AFTER the old process exits. Copying _internal while
+        # the old process is still running causes locked-DLL failures.
+        staging_file = exe.parent / ".shtucodeproxy_update_staging"
+        try:
+            staging_file.write_text(str(new_exe_path.parent), encoding="utf-8")
+        except Exception:
+            pass
 
         # WHY: Do NOT delete the lock file here. The new process handles lock
         # cleanup on startup via the SHTUCODEPROXY_AUTO_START flag.
@@ -249,6 +236,35 @@ def cleanup_after_update() -> None:
     exe = _running_exe_path()
     old = _old_exe_path()
     marker = _rollback_marker_path()
+
+    # Copy _internal directory from staging (post-update, old process has exited)
+    exe = _running_exe_path()
+    if exe:
+        staging_file = exe.parent / ".shtucodeproxy_update_staging"
+        if staging_file.exists():
+            try:
+                import shutil
+                source_dir = Path(staging_file.read_text(encoding="utf-8").strip())
+                source_internal = source_dir / "_internal"
+                dest_internal = exe.parent / "_internal"
+                if source_internal.is_dir():
+                    if dest_internal.is_dir():
+                        for item in dest_internal.iterdir():
+                            try:
+                                if item.is_dir():
+                                    shutil.rmtree(str(item))
+                                else:
+                                    item.unlink()
+                            except Exception:
+                                pass
+                    shutil.copytree(str(source_internal), str(dest_internal), dirs_exist_ok=True)
+            except Exception:
+                pass
+            finally:
+                try:
+                    staging_file.unlink()
+                except Exception:
+                    pass
 
     # Remove .old backup
     if old and old.exists():

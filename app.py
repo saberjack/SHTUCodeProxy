@@ -23,13 +23,28 @@ def has_display() -> bool:
 
 if __name__ == "__main__":
     # Handle --update-cleanup: called by the new exe after an auto-update
+    # WHY: Run cleanup in a background thread so the GUI starts immediately
+    # instead of blocking 2-5 seconds while waiting for the old process to exit.
+    # The user sees the window appear right away instead of thinking the restart failed.
     if "--update-cleanup" in sys.argv:
+        import threading
         import platform as _pf
         if _pf.system() == "Windows":
             from updater_win import cleanup_after_update
         else:
             from updater_linux import cleanup_after_update
-        cleanup_after_update()
+        # Remove rollback marker immediately so crashes during GUI startup don't trigger rollback
+        # (the exe replacement was already successful if we got this far)
+        import platform as _pf_marker
+        if _pf_marker.system() == "Windows":
+            from updater_win import _rollback_marker_path
+            _marker = _rollback_marker_path()
+            if _marker and _marker.exists():
+                try:
+                    _marker.unlink()
+                except Exception:
+                    pass
+        threading.Thread(target=cleanup_after_update, daemon=True).start()
 
     # Handle --start-proxy: auto-start proxy after update (then launch GUI normally)
     # This flag is set by updater when restarting after an update
