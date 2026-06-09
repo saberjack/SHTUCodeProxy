@@ -2707,8 +2707,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # inject it so the proxy treats the request as if thinking was requested.
             # This ensures reasoning content is emitted as thinking blocks (collapsible
             # in Claude Code / Codex) instead of plain text.
+            # budget_tokens is required by Anthropic API spec; allocate max_tokens-1
+            # so thinking gets most of the budget (cc-switch uses the same strategy).
             if not isinstance(body.get("thinking"), dict) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
-                body["thinking"] = {"type": "enabled"}
+                _budget = max(1, (body.get("max_tokens") or 16384) - 1)
+                body["thinking"] = {"type": "enabled", "budget_tokens": _budget}
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, anthropic_current_user_modalities(body))
             if unsupported:
@@ -2761,7 +2764,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # inject it so reasoning content is emitted as reasoning items (collapsible
             # in Codex) instead of plain text.
             if not isinstance(body.get("thinking"), dict) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
-                body["thinking"] = {"type": "enabled"}
+                body["thinking"] = {"type": "enabled", "budget_tokens": max(1, (body.get("max_output_tokens") or body.get("max_tokens") or 16384) - 1)}
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, responses_current_user_modalities(body))
             if unsupported:
