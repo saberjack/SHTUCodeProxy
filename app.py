@@ -76,6 +76,14 @@ if __name__ == "__main__":
                 print("Rollback attempt failed: " + str(err))
             # Either way, continue running (with whatever version we have)
 
+    # Clean up stale _internal/ from previous onedir installs
+    # WHY: PyInstaller loads from _internal/ first if it exists next to the exe,
+    # causing version mismatch and DLL conflicts when the exe was updated from
+    # a folder-based (onedir) install to a single-file (onefile) build.
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        from updater_win import cleanup_stale_internal
+        cleanup_stale_internal()
+
     if len(sys.argv) > 1:
         raise SystemExit(main(sys.argv[1:]))
 

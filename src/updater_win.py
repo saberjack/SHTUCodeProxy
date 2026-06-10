@@ -249,6 +249,29 @@ def apply_update(
         return False, "Update apply failed: " + str(e)
 
 
+
+def cleanup_stale_internal() -> Tuple[bool, Optional[str]]:
+    if not getattr(sys, 'frozen', False):
+        return False, None
+    exe = _running_exe_path()
+    if not exe:
+        return False, None
+    dest_internal = exe.parent / '_internal'
+    if not dest_internal.is_dir():
+        return False, None
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        try:
+            if Path(meipass).resolve() == dest_internal.resolve():
+                return False, None
+        except Exception:
+            pass
+    try:
+        shutil.rmtree(str(dest_internal))
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
 def _wait_for_pid_exit(pid: int, timeout: float = 10.0) -> bool:
     """Wait for a process with the given PID to exit.
 
@@ -312,12 +335,12 @@ def cleanup_after_update() -> None:
     # _internal/ next to the exe. The auto-update downloads a single-file exe.
     # The stale _internal/ can cause PyInstaller to load old modules/VERSION,
     # leading to version mismatch and DLL conflicts.
-    if exe and source_dir:
-        source_internal = source_dir / "_internal"
-        dest_internal = exe.parent / "_internal"
-        if source_internal.is_dir():
-            # Source has _internal - this is a folder-based update
-            if dest_internal.is_dir():
+    dest_internal = exe.parent / "_internal" if exe else None
+    if dest_internal and dest_internal.is_dir():
+        if exe and source_dir:
+            source_internal = source_dir / "_internal"
+            if source_internal.is_dir():
+                # Source has _internal - folder-based update
                 for item in dest_internal.iterdir():
                     try:
                         if item.is_dir():
@@ -326,17 +349,20 @@ def cleanup_after_update() -> None:
                             item.unlink()
                     except Exception:
                         pass
-            try:
-                shutil.copytree(
-                    str(source_internal), str(dest_internal), dirs_exist_ok=True
-                )
-            except Exception:
-                pass
-        elif dest_internal.is_dir():
-            # Source has NO _internal but destination does
-            # WHY: This means the new exe is a single-file build.
-            # The stale _internal/ from the old folder-based install must
-            # be removed to prevent version mismatch and DLL conflicts.
+                try:
+                    shutil.copytree(
+                        str(source_internal), str(dest_internal), dirs_exist_ok=True
+                    )
+                except Exception:
+                    pass
+            else:
+                # Source has NO _internal but destination does
+                try:
+                    shutil.rmtree(str(dest_internal))
+                except Exception:
+                    pass
+        else:
+            # No source_dir info (staging file missing) - remove stale _internal
             try:
                 shutil.rmtree(str(dest_internal))
             except Exception:
