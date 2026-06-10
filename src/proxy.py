@@ -1705,7 +1705,10 @@ def responses_request_to_chat_completions(body: Dict[str, Any], fallback_model: 
     tools = [tool for tool in (responses_tool_to_chat_tool(item) for item in body.get("tools", [])) if tool]
     if tools:
         payload["tools"] = tools
-    if body.get("tool_choice") is not None:
+    # WHY: Only set tool_choice when tools are present. Upstream APIs
+    # (e.g. qwen-instruct) reject requests with tool_choice but no tools:
+    # "When using `tool_choice`, `tools` must be set."
+    if body.get("tool_choice") is not None and tools:
         payload["tool_choice"] = responses_tool_choice_to_chat(body["tool_choice"])
     # If messages contain tool_calls/tool role but payload has no tools definition,
     # upstream APIs (e.g. glm-chat) require a tools field to accept tool_calls messages.
