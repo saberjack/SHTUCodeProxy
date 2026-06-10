@@ -1910,6 +1910,23 @@ def extract_text_delta(event: Optional[str], data: str) -> Tuple[str, Optional[D
 
     if event_type in ("error", "response.failed") or obj.get("error"):
         return "error", obj
+    # WHY: vLLM upstreams return errors in various non-standard formats when
+    # context overflows or other issues occur during streaming. The error may
+    # appear as: {"object": "error", "message": "..."}, or the SSE event type
+    # may be "error" while the JSON "type" field is different. Detect these
+    # so upstream errors are propagated to the client instead of being silently
+    # ignored (which results in empty responses).
+    if isinstance(obj, dict):
+        # vLLM format: {"object": "error", "message": "...", "type": "..."}
+        if obj.get("object") == "error" and obj.get("message"):
+            return "error", obj
+        # Some vLLM versions: {"detail": "error message", "type": "..."}
+        if obj.get("detail") and isinstance(obj.get("detail"), str) and not obj.get("choices"):
+            return "error", {"error": {"type": "upstream_error", "message": obj["detail"]}, "raw": obj}
+        # Chat completions error: {"error": {"message": "...", "type": "..."}}
+        err = obj.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return "error", obj
     return "ignore", obj
 
 def parse_tool_arguments(arguments: Any) -> Dict[str, Any]:
@@ -3232,6 +3249,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
             for pseudo_tool_call in pseudo_tool_calls:
                 merge_tool_call_payloads(tool_calls, pseudo_tool_call)
         if not output_text and not tool_calls:
+            # WHY: Check for upstream error in done_payload and retry response
+            # before falling back to a generic error message.
+            codex_upstream_error = ""
+            if isinstance(done_payload, dict):
+                raw_obj = done_payload.get("raw", done_payload)
+                if isinstance(raw_obj, dict):
+                    err = raw_obj.get("error")
+                    if isinstance(err, dict) and err.get("message"):
+                        codex_upstream_error = err["message"]
+                    elif isinstance(err, str) and err:
+                        codex_upstream_error = err
+                    elif raw_obj.get("object") == "error" and raw_obj.get("message"):
+                        codex_upstream_error = raw_obj["message"]
+                    elif raw_obj.get("detail") and isinstance(raw_obj.get("detail"), str):
+                        codex_upstream_error = raw_obj["detail"]
             retry_payload = dict(upstream_payload)
             retry_payload["stream"] = False
             retry_payload.pop("stream_options", None)
@@ -3239,6 +3271,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 with open_upstream(retry_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
                     raw_payload = response.read().decode("utf-8", errors="replace")
                 fallback_payload = json.loads(raw_payload)
+                # WHY: Check if non-stream retry returned an error response
+                if isinstance(fallback_payload, dict):
+                    err = fallback_payload.get("error")
+                    if isinstance(err, dict) and err.get("message"):
+                        codex_upstream_error = codex_upstream_error or err["message"]
+                        log(f"codex stream retry returned error model={model_config.model_id} error={err['message'][:200]}")
+                    elif fallback_payload.get("object") == "error" and fallback_payload.get("message"):
+                        codex_upstream_error = codex_upstream_error or fallback_payload["message"]
+                        log(f"codex stream retry returned error model={model_config.model_id} error={fallback_payload['message'][:200]}")
+                    elif fallback_payload.get("detail") and isinstance(fallback_payload.get("detail"), str):
+                        codex_upstream_error = codex_upstream_error or fallback_payload["detail"]
+                        log(f"codex stream retry returned error model={model_config.model_id} detail={fallback_payload['detail'][:200]}")
                 log(f"codex empty stream fallback model={model_config.model_id}")
                 output_text = response_text_from_upstream_json(fallback_payload)
                 if not output_text and isinstance(fallback_payload.get("choices"), list):
@@ -3250,10 +3294,16 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     )
                     output_text = responses_json_output_text(converted.get("output", []))
                 log(f"codex empty stream fallback model={model_config.model_id} chars={len(output_text)}")
+            except urllib.error.HTTPError as retry_http_exc:
+                retry_body = retry_http_exc.read().decode("utf-8", errors="replace")
+                retry_msg = f"HTTP {retry_http_exc.code}: {retry_body[:300]}"
+                codex_upstream_error = codex_upstream_error or retry_msg
+                log(f"codex stream retry http error model={model_config.model_id} {retry_msg}")
             except Exception as exc:
                 log(f"codex empty stream fallback failed model={model_config.model_id} error={exc}")
         if not output_text and not tool_calls:
-            emit("response.failed", {"response": {"id": request_id, "status": "failed", "error": {"type": "api_error", "message": "Upstream completed without assistant text or tool calls"}}})
+            error_msg = codex_upstream_error or "Upstream completed without assistant text or tool calls"
+            emit("response.failed", {"response": {"id": request_id, "status": "failed", "error": {"type": "api_error", "message": error_msg}}})
             write_data_sse(self, "[DONE]")
             self.close_connection = True
             return
@@ -3532,6 +3582,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         done_payload: Optional[Dict[str, Any]] = None
         chat_stream_usage: Optional[Dict[str, Any]] = None
         thinking_state: Dict[str, Any] = {"in_thinking": False}
+        # WHY: Collect upstream error info from SSE events so it can be
+        # propagated to the client instead of producing an empty response.
+        stream_error_message: str = ""
         stream_bridge = model_config.stream_bridge
         if model_config.api_format == "chat_completions" and stream_bridge:
             non_stream_payload = dict(upstream_payload)
@@ -3748,7 +3801,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     elif kind == "usage" and parsed and isinstance(parsed.get("usage"), dict):
                         chat_stream_usage = parsed["usage"]
                     elif kind == "error":
-                        self._send_anthropic_stream_error(json.dumps(parsed, ensure_ascii=False), text_block_started, text_block_stopped)
+                        # WHY: Extract a human-readable error message from the upstream
+                        # error payload before sending to client. This message is also
+                        # saved in stream_error_message as a safety net in case the
+                        # SSE write fails and we fall through to the empty-stream path.
+                        _err_msg = ""
+                        if isinstance(parsed, dict):
+                            err_obj = parsed.get("error")
+                            if isinstance(err_obj, dict):
+                                _err_msg = err_obj.get("message", "")
+                            elif isinstance(err_obj, str):
+                                _err_msg = err_obj
+                            if not _err_msg and parsed.get("message"):
+                                _err_msg = parsed["message"]
+                            if not _err_msg and parsed.get("detail"):
+                                _err_msg = str(parsed["detail"])
+                        if not _err_msg:
+                            _err_msg = json.dumps(parsed, ensure_ascii=False)[:500]
+                        stream_error_message = _err_msg
+                        log(f"upstream stream error model={model_config.model_id} error={_err_msg[:200]}")
+                        self._send_anthropic_stream_error(_err_msg, text_block_started, text_block_stopped)
                         return
                     elif kind == "done":
                         done_payload = parsed
@@ -3806,6 +3878,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     fallback_choices = done_payload.get("raw", {}).get("choices") if isinstance(done_payload.get("raw"), dict) else None
                     if isinstance(fallback_choices, list) and fallback_choices:
                         output_text = fallback_choices[0].get("message", {}).get("content", "") if isinstance(fallback_choices[0], dict) else ""
+            # WHY: Check if the ignored SSE events contained an upstream error.
+            # When upstream returns HTTP 200 but the SSE body contains an error
+            # (e.g. vLLM context overflow), extract_text_delta() may have
+            # returned "error" before the fix, but some edge-case formats
+            # might still be missed. Check done_payload and stream_error_message
+            # as safety nets.
+            upstream_error_message_text = stream_error_message
+            if isinstance(done_payload, dict):
+                # Check done_payload for error info (chat completions format)
+                raw_obj = done_payload.get("raw", done_payload)
+                if isinstance(raw_obj, dict):
+                    err = raw_obj.get("error")
+                    if isinstance(err, dict) and err.get("message"):
+                        upstream_error_message_text = err["message"]
+                    elif isinstance(err, str) and err:
+                        upstream_error_message_text = err
+                    elif raw_obj.get("object") == "error" and raw_obj.get("message"):
+                        upstream_error_message_text = raw_obj["message"]
+                    elif raw_obj.get("detail") and isinstance(raw_obj.get("detail"), str):
+                        upstream_error_message_text = raw_obj["detail"]
             # Step 2: If done_payload extraction failed, re-issue as non-streaming
             if not output_text:
                 retry_payload = dict(upstream_payload)
@@ -3815,6 +3907,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     with open_upstream(retry_payload, auth_token, upstream_url, timeout, model_config.api_format) as retry_resp:
                         raw_retry = retry_resp.read().decode("utf-8", errors="replace")
                     retry_json = json.loads(raw_retry)
+                    # WHY: Check if non-stream retry returned an error response
+                    # (e.g. context overflow). If so, extract the error message
+                    # instead of silently producing an empty response.
+                    if isinstance(retry_json, dict):
+                        err = retry_json.get("error")
+                        if isinstance(err, dict) and err.get("message"):
+                            upstream_error_message_text = upstream_error_message_text or err["message"]
+                            log(f"anthropic stream retry returned error model={model_config.model_id} error={err['message'][:200]}")
+                        elif retry_json.get("object") == "error" and retry_json.get("message"):
+                            upstream_error_message_text = upstream_error_message_text or retry_json["message"]
+                            log(f"anthropic stream retry returned error model={model_config.model_id} error={retry_json['message'][:200]}")
+                        elif retry_json.get("detail") and isinstance(retry_json.get("detail"), str):
+                            upstream_error_message_text = upstream_error_message_text or retry_json["detail"]
+                            log(f"anthropic stream retry returned error model={model_config.model_id} detail={retry_json['detail'][:200]}")
                     output_text = response_text_from_upstream_json(retry_json)
                     if not output_text and model_config.api_format == "chat_completions" and isinstance(retry_json.get("choices"), list):
                         converted = chat_completion_json_to_responses(
@@ -3823,8 +3929,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             retry_payload.get("tools") if isinstance(retry_payload.get("tools"), list) else None,
                         )
                         output_text = responses_json_output_text(converted.get("output", []))
+                except urllib.error.HTTPError as retry_http_exc:
+                    retry_body = retry_http_exc.read().decode("utf-8", errors="replace")
+                    retry_msg = f"HTTP {retry_http_exc.code}: {retry_body[:300]}"
+                    upstream_error_message_text = upstream_error_message_text or retry_msg
+                    log(f"anthropic stream retry http error model={model_config.model_id} {retry_msg}")
                 except Exception as retry_exc:
                     log(f"anthropic stream non-stream retry failed model={model_config.model_id} error={retry_exc}")
+            # WHY: If both stream and retry failed and we have an upstream error
+            # message, send it to the client instead of an empty response.
+            # This ensures the user sees the actual error (e.g. context overflow)
+            # instead of a silent empty reply.
+            if not output_text and not tool_calls and upstream_error_message_text:
+                log(f"anthropic empty stream with upstream error model={model_config.model_id} error={upstream_error_message_text[:200]}")
+                self._send_anthropic_stream_error(upstream_error_message_text, text_block_started, text_block_stopped)
+                return
             log(f"anthropic empty stream fallback model={model_config.model_id} chars={len(output_text)}")
             if output_text and not text_block_started:
                 # Fallback recovered text - emit content_block events
