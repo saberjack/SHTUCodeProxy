@@ -2459,10 +2459,15 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
                     _reasoning_as_text_fallback = reasoning_text
             continue
         if item.get("type") == "function_call":
+            # WHY: Skip function_call items with no name — they are empty padding
+            # or malformed items that would create phantom "tool" calls (Bug #1).
+            fc_name = item.get("name")
+            if not fc_name:
+                continue
             content.append({
                 "type": "tool_use",
                 "id": item.get("call_id") or item.get("id") or f"toolu_proxy_{now_ms()}_{uuid.uuid4().hex[:8]}",
-                "name": item.get("name") or "tool",
+                "name": fc_name,
                 "input": parse_tool_arguments(item.get("arguments", "")),
             })
     output_text = responses_json_output_text(output)
@@ -2480,9 +2485,13 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
     # WHY: Only inject redacted_thinking when client explicitly requested thinking
     # and no real thinking was found. Since we now always emit reasoning as text,
     # this only triggers for models without reasoning support.
-    # DISABLED: redacted_thinking causes garbled output; reasoning now in code block
-    # if thinking_requested(payload) and not has_real_thinking:
-    #     content = inject_redacted_thinking_to_content(content)
+    # WHY: Inject a thinking block when client requested thinking but upstream
+    # didn't return one. This enables Claude Code auto mode (Bug #2).
+    # Use visible thinking with placeholder text instead of redacted_thinking
+    # to avoid garbled output from opaque data.
+    if thinking_requested(payload) and not has_real_thinking:
+        if not any(block.get("type") in ("thinking", "redacted_thinking") for block in content):
+            content = [{"type": "thinking", "thinking": _THINKING_PLACEHOLDER_TEXT}] + content
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     return {
         "id": anthropic_message_id(),
@@ -3327,7 +3336,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             emit("response.content_part.done", {"item_id": message_id, "output_index": 0, "content_index": 0, "part": text_item["content"][0]})
             emit("response.output_item.done", {"output_index": 0, "item": text_item})
             output.append(text_item)
-        for offset, tool_call in enumerate(tool_calls):
+        # WHY: Filter out empty padding entries from merge_tool_call() (Bug #1).
+        valid_tool_calls = [tc for tc in tool_calls if tc.get("name") and tc.get("id")]
+        for offset, tool_call in enumerate(valid_tool_calls):
             item = codex_function_call_item(tool_call, offset)
             output_index = len(output)
             emit("response.output_item.added", {"output_index": output_index, "item": dict(item, status="in_progress")})
@@ -3335,10 +3346,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
             emit("response.function_call_arguments.done", {"item_id": item["id"], "output_index": output_index, "arguments": item["arguments"]})
             emit("response.output_item.done", {"output_index": output_index, "item": item})
             output.append(item)
-        # DISABLED: redacted_thinking causes garbled output; reasoning now in code block
-        # if thinking_requested(body):
-        #     output = inject_redacted_thinking_to_responses_output(output)
-        #     output = strip_encrypted_content_from_output(output)
+        # WHY: Inject a reasoning item when client requested thinking but upstream
+        # didn't return one. This enables Claude Code auto mode (Bug #2).
+        # Use reasoning with placeholder text instead of redacted_thinking.
+        if thinking_requested(body):
+            if not any(isinstance(item, dict) and item.get("type") in ("reasoning",) for item in output):
+                reasoning_item = {
+                    "id": response_output_item_id(),
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": _THINKING_PLACEHOLDER_TEXT}],
+                }
+                output = [reasoning_item] + output
         completed = responses_completed_payload(request_id, model_config.model_id, output, input_tokens, output_text)
         if done_payload and isinstance(done_payload.get("response"), dict):
             completed["usage"] = done_payload["response"].get("usage") or completed["usage"]
@@ -3367,7 +3386,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     upstream_payload.get("tools") if isinstance(upstream_payload.get("tools"), list) else None,
                 )
                 if payload.get("output"):
-                    # DISABLED: redacted_thinking causes garbled output; reasoning now in code block
+                    # WHY: Inject reasoning placeholder for auto mode (Bug #2)
                     # if thinking_requested(body):
                     #     payload["output"] = inject_redacted_thinking_to_responses_output(payload["output"])
                     #     payload["output"] = strip_encrypted_content_from_output(payload["output"])
@@ -3563,9 +3582,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # from upstream reasoning_content can be emitted instead.
         _thinking_block_index = 0
         _model_supports_reasoning = getattr(model_config, 'supports_reasoning', False)
-        # DISABLED: redacted_thinking causes garbled output; reasoning now as text
-        # if thinking_requested(body) and not _model_supports_reasoning:
-        #     emit_redacted_thinking_sse(self, index=0)
+        # WHY: Inject a thinking block when client requested thinking but model
+        # doesn't support native reasoning. This enables Claude Code auto mode (Bug #2).
+        # Use visible thinking with placeholder text instead of redacted_thinking
+        # to avoid garbled output from opaque data.
+        if thinking_requested(body) and not _model_supports_reasoning:
+            write_sse(self, "content_block_start", {
+                "type": "content_block_start",
+                "index": _thinking_block_index,
+                "content_block": {"type": "thinking", "thinking": ""},
+            })
+            write_sse(self, "content_block_delta", {
+                "type": "content_block_delta",
+                "index": _thinking_block_index,
+                "delta": {"type": "thinking_delta", "thinking": _THINKING_PLACEHOLDER_TEXT},
+            })
+            write_sse(self, "content_block_stop", {
+                "type": "content_block_stop",
+                "index": _thinking_block_index,
+            })
+            _thinking_block_index += 1
 
         output_text_parts: List[str] = []
         reasoning_parts: List[str] = []
@@ -3992,7 +4028,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index})
             text_block_stopped = True
         next_index = (1 if text_block_started else 0) + _thinking_block_index
-        for offset, tool_call in enumerate(tool_calls):
+        # WHY: Filter out empty padding entries from merge_tool_call() that have
+        # no real id/name. Without this filter, padding entries are emitted as
+        # phantom "tool" calls that Claude Code cannot handle (Bug #1).
+        valid_tool_calls = [tc for tc in tool_calls if tc.get("name") and tc.get("id")]
+        for offset, tool_call in enumerate(valid_tool_calls):
             block_index = next_index + offset
             tool_id = tool_call.get("id") or f"toolu_proxy_{now_ms()}_{offset}"
             tool_name = tool_call.get("name") or "tool"
