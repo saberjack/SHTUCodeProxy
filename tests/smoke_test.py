@@ -42,6 +42,7 @@ from proxy import (
     sanitized_responses_body_for_model,
     sanitized_upstream_payload_for_model,
     usage_cache_debug,
+    is_claude_auto_classifier_request,
     log,
     apply_auto_cache_control,
     has_cache_metadata,
@@ -88,6 +89,37 @@ def make_config(tmpdir: Path) -> AppConfig:
 def assert_true(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def exercise_anthropic_stream_delta_usage_shape(tmpdir: Path) -> None:
+    class FakeHandler:
+        def __init__(self) -> None:
+            self.events = []
+            self.close_connection = False
+
+    handler = FakeHandler()
+    with patch("proxy.write_sse", lambda _handler, _event, payload: handler.events.append((_event, payload))):
+        from proxy import ProxyHandler
+        ProxyHandler._emit_anthropic_message_as_stream(handler, {
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        })
+    deltas = [payload for event, payload in handler.events if event == "message_delta"]
+    assert_true(bool(deltas), "stream fallback should emit message_delta")
+    assert_true("input_tokens" in deltas[-1]["usage"], "Anthropic stream delta usage must include input_tokens for Claude auto classifier")
+
+
+def exercise_claude_auto_classifier_detection() -> None:
+    body = {
+        "model": "qwen-instruct",
+        "system": "You are a security monitor for autonomous AI coding agents. Output <block>yes</block> or <block>no</block> during the Classification Process.",
+        "messages": [{"role": "user", "content": "Bash echo hello"}],
+    }
+    assert_true(is_claude_auto_classifier_request(body), "auto safety classifier requests should skip injected thinking")
+    regular = {"system": "You are helpful.", "tools": [{"name": "Bash"}], "messages": []}
+    assert_true(not is_claude_auto_classifier_request(regular), "regular tool requests should keep existing thinking behavior")
+
 
 
 def exercise_tool_call_translation() -> None:
@@ -1480,6 +1512,8 @@ def main() -> int:
 
         assert_true(portable_claude_path("") != "", "portable claude path fallback empty")
         assert_true(portable_settings_path("").endswith(str(Path(".claude") / "settings.json")), "settings fallback mismatch")
+        exercise_claude_auto_classifier_detection()
+        exercise_anthropic_stream_delta_usage_shape(tmpdir)
         exercise_tool_call_translation()
         exercise_cache_control_passthrough()
         exercise_file_logging(tmpdir)

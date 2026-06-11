@@ -122,6 +122,23 @@
 | **开发记录** | docs/dev-notes/2026-06-08-full-api-test-rerun.md |
 | **回归测试** | `PYTHONPATH=src python tests\smoke_test.py` PASS；`python tests\full_api_regression_20260608.py` 48/48 PASS |
 
+
+### #007 — Claude Code auto mode safety classifier 走 qwen-instruct 失败
+
+| 字段 | 内容 |
+|------|------|
+| **状态** | 🟢 已修复 |
+| **优先级** | P1 |
+| **发现日期** | 2026-06-11 |
+| **修复日期** | 2026-06-11 |
+| **发现人** | 用户 |
+| **影响范围** | Claude Code CLI auto mode；需要自动判定 Bash 等工具安全性的场景 |
+| **现象** | Claude Code CLI auto mode 执行 Bash 前报错：`qwen-instruct is temporarily unavailable, so auto mode cannot determine the safety of Bash right now` |
+| **根因** | Claude Code auto classifier 是普通非流式 Anthropic Messages 调用；代理按全局 default_stream 强制转 SSE，且自动 thinking 注入会让 qwen 输出 reasoning 而非严格 `<block>` 判定，导致 Claude classifier 解析 `usage.input_tokens` 时崩溃并把 qwen 标记为 unavailable。 |
+| **修复提交** | 待提交 |
+| **开发记录** | docs/dev-notes/2026-06-11-claude-auto-classifier-qwen.md |
+| **回归测试** | `python -m py_compile src\proxy.py tests\smoke_test.py` PASS；targeted tests PASS；测试端口 8097 + Claude Code CLI 2.1.172 + qwen-instruct + `--permission-mode auto` 可执行安全 Bash 检查；完整 smoke 存在既有 cache-control 断言失败，未作为本次修复范围。 |
+
 ### #001 — 示例条目（请删除）
 
 | 字段 | 值 |

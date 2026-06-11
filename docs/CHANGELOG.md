@@ -1,3 +1,23 @@
+# Changelog
+
+## v4.8.0 (2026-06-11)
+
+Claude Code auto mode safety classifier compatibility release.
+
+### Fixed
+
+- **P1**: Fixed Claude Code CLI `--permission-mode auto` failing with `qwen-instruct is temporarily unavailable, so auto mode cannot determine the safety of Bash right now` when qwen-instruct is selected as the auto-mode classifier model.
+- **P1**: Preserved user-configurable Claude model routing. Main, Haiku, Sonnet, Opus, and Reasoning routes remain fully user-selectable; the fix is protocol compatibility, not a forced model override.
+- **P1**: Restored non-streaming Anthropic Messages responses for Claude Code auto classifier calls when the client does not explicitly request streaming, matching the classifier parser's expectations.
+- **P1**: Skipped automatic thinking injection for Claude Code auto classifier requests so qwen-instruct can return strict `<block>` safety verdicts instead of reasoning transcripts.
+- **P2**: Completed `usage.input_tokens` in Anthropic SSE fallback `message_delta` events to avoid parser crashes in strict clients.
+
+### Validation
+
+- `python -m py_compile src\proxy.py tests\smoke_test.py` PASS.
+- Targeted classifier detection and Anthropic SSE usage-shape tests PASS.
+- Real Claude Code CLI 2.1.172 + qwen-instruct + `--permission-mode auto` verified on test port 8097: Bash environment-token presence check executes without classifier-unavailable error.
+
 ## v4.6.6 (2026-06-08)
 
 Claude Code /model switching fix for qwen-instruct and minimax.

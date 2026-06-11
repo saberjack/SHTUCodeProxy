@@ -110,6 +110,27 @@ def request_stream_enabled(body: Dict[str, Any], default_stream: bool = True) ->
     return bool(default_stream)
 
 
+def _text_contains_any(value: Any, needles: tuple[str, ...]) -> bool:
+    if isinstance(value, str):
+        lower = value.lower()
+        return any(needle in lower for needle in needles)
+    if isinstance(value, list):
+        return any(_text_contains_any(item, needles) for item in value)
+    if isinstance(value, dict):
+        return any(_text_contains_any(item, needles) for item in value.values())
+    return False
+
+
+def is_claude_auto_classifier_request(body: Dict[str, Any]) -> bool:
+    # WHY: Claude Code auto mode expects a strict safety verdict before it runs
+    # tools like Bash. Auto-injecting thinking makes qwen-instruct answer with a
+    # reasoning transcript instead of a parseable verdict, which Claude reports
+    # as the classifier model being temporarily unavailable. The classifier is
+    # itself a plain model call, not a tool-enabled request.
+    needles = ("security monitor", "auto mode", "classification process", "<block>", "permission")
+    return _text_contains_any(body.get("system"), needles)
+
+
 def parse_pseudo_attributes(value: str) -> Dict[str, str]:
     return {name: raw.strip() for name, _, raw in PSEUDO_ATTR_RE.findall(value)}
 
@@ -2731,7 +2752,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # but _thinking_requested flag is preserved so we can inject redacted_thinking in the response.
 
             config = current_config()
-            stream = request_stream_enabled(body, config.default_stream)
+            classifier_request = is_claude_auto_classifier_request(body)
+            stream = False if classifier_request and "stream" not in body else request_stream_enabled(body, config.default_stream)
             model_config = config.find_model(body.get("model"))
             upstream_url = os.getenv("UPSTREAM_RESPONSES_URL") or model_config.base_url
             fallback_model = os.getenv("UPSTREAM_MODEL") or model_config.model_id
@@ -2744,7 +2766,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # in Claude Code / Codex) instead of plain text.
             # budget_tokens is required by Anthropic API spec; allocate max_tokens-1
             # so thinking gets most of the budget (cc-switch uses the same strategy).
-            if not isinstance(body.get("thinking"), dict) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+            if not isinstance(body.get("thinking"), dict) and not classifier_request and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
                 _budget = max(1, (body.get("max_tokens") or 16384) - 1)
                 body["thinking"] = {"type": "enabled", "budget_tokens": _budget}
             body_for_upstream = body
@@ -2798,7 +2820,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # WHY: When model has Thinking enabled but client didn't send thinking param,
             # inject it so reasoning content is emitted as reasoning items (collapsible
             # in Codex) instead of plain text.
-            if not isinstance(body.get("thinking"), dict) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+            if not isinstance(body.get("thinking"), dict) and not is_claude_auto_classifier_request(body) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
                 body["thinking"] = {"type": "enabled", "budget_tokens": max(1, (body.get("max_output_tokens") or body.get("max_tokens") or 16384) - 1)}
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, responses_current_user_modalities(body))
@@ -3554,7 +3576,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         write_sse(self, "message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {"output_tokens": 0},
+            "usage": {"input_tokens": 0, "output_tokens": 0},
         })
         write_sse(self, "message_stop", {"type": "message_stop"})
         self.close_connection = True
@@ -3696,7 +3718,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 write_sse(self, "message_delta", {
                     "type": "message_delta",
                     "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                    "usage": {"output_tokens": usage.get("output_tokens", 0)},
+                    "usage": {"input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0)},
                 })
                 write_sse(self, "message_stop", {"type": "message_stop"})
                 self.close_connection = True
@@ -4089,7 +4111,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     write_sse(self, "content_block_delta", {"type": "content_block_delta", "index": block_index, "delta": {"type": "input_json_delta", "partial_json": json_dumps_compact(block.get("input", {}))}})
             write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": block_index})
         usage = anthropic_msg.get("usage", {}) if isinstance(anthropic_msg.get("usage"), dict) else {}
-        write_sse(self, "message_delta", {"type": "message_delta", "delta": {"stop_reason": anthropic_msg.get("stop_reason", "end_turn"), "stop_sequence": None}, "usage": {"output_tokens": usage.get("output_tokens", 0)}})
+        write_sse(self, "message_delta", {"type": "message_delta", "delta": {"stop_reason": anthropic_msg.get("stop_reason", "end_turn"), "stop_sequence": None}, "usage": {"input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0)}})
         write_sse(self, "message_stop", {"type": "message_stop"})
         self.close_connection = True
 
