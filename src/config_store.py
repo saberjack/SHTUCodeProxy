@@ -196,6 +196,12 @@ class AppConfig:
     update_check_interval_hours: int
     update_include_prerelease: bool
     update_auto_download: bool
+    auth_key: str
+    log_level: int
+    ssl_cert: str
+    ssl_key: str
+    allowed_ips: List[str]
+    denied_ips: List[str]
     models: List[ModelConfig]
 
     @classmethod
@@ -221,6 +227,12 @@ class AppConfig:
             update_check_interval_hours=24,
             update_include_prerelease=False,
             update_auto_download=False,
+            auth_key="",
+            log_level=-1,  # -1 表示未配置, 使用环境变量或默认值 2
+            ssl_cert="",
+            ssl_key="",
+            allowed_ips=[],
+            denied_ips=[],
             models=[
                 ModelConfig(
                     name="Default GPT-5.5",
@@ -280,6 +292,12 @@ class AppConfig:
             update_check_interval_hours=int(data.get("update_check_interval_hours", default.update_check_interval_hours)),
             update_include_prerelease=bool(data.get("update_include_prerelease", default.update_include_prerelease)),
             update_auto_download=bool(data.get("update_auto_download", default.update_auto_download)),
+            auth_key=str(data.get("auth_key") or "").strip(),
+            log_level=int(data.get("log_level") if data.get("log_level") is not None else -1),
+            ssl_cert=str(data.get("ssl_cert") or "").strip(),
+            ssl_key=str(data.get("ssl_key") or "").strip(),
+            allowed_ips=[str(ip).strip() for ip in data.get("allowed_ips", []) if str(ip).strip()],
+            denied_ips=[str(ip).strip() for ip in data.get("denied_ips", []) if str(ip).strip()],
             models=models or default.models,
         )
         result._loaded_at = time.time()
@@ -307,6 +325,12 @@ class AppConfig:
             "update_check_interval_hours": self.update_check_interval_hours,
             "update_include_prerelease": self.update_include_prerelease,
             "update_auto_download": self.update_auto_download,
+            "auth_key": self.auth_key,
+            "log_level": self.log_level,
+            "ssl_cert": self.ssl_cert,
+            "ssl_key": self.ssl_key,
+            "allowed_ips": self.allowed_ips,
+            "denied_ips": self.denied_ips,
             "models": [model.to_dict() for model in self.models],
         }
 
