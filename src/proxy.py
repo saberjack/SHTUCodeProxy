@@ -1059,12 +1059,41 @@ def _strip_cache_control(value: Any) -> Any:
     return value
 
 
+def _strip_bing_grounding(value: Any) -> Any:
+    """Recursively remove Bing Search grounding features (platform policy: disabled).
+
+    Strips:
+      - tools with type "bing_grounding" (Chat Completions / Responses API)
+      - data_sources entries with type "azure_grounding" (Chat Completions API)
+    """
+    if isinstance(value, dict):
+        result = {k: _strip_bing_grounding(v) for k, v in value.items()}
+        if "data_sources" in result and isinstance(result["data_sources"], list):
+            filtered = [ds for ds in result["data_sources"] if not (isinstance(ds, dict) and ds.get("type") == "azure_grounding")]
+            if len(filtered) < len(result["data_sources"]):
+                log("stripped azure_grounding from data_sources (platform policy)")
+            result["data_sources"] = filtered
+            if not filtered:
+                del result["data_sources"]
+        return result
+    if isinstance(value, list):
+        filtered = []
+        for item in value:
+            if isinstance(item, dict) and item.get("type") == "bing_grounding":
+                log("stripped bing_grounding tool (platform policy)")
+                continue
+            filtered.append(_strip_bing_grounding(item))
+        return filtered
+    return value
+
+
 def sanitized_upstream_payload_for_model(payload: Dict[str, Any], model_config: ModelConfig) -> Dict[str, Any]:
     result = sanitized_upstream_value_for_model(payload, model_config) if isinstance(payload, dict) else payload
     # WHY: cache_control is Anthropic-specific; no upstream API supports it.
     # Leaving it in causes empty streams (GPT-5.5 responses) or errors.
     if isinstance(result, dict):
         result = _strip_cache_control(result)
+        result = _strip_bing_grounding(result)
     # WHY: When model supports reasoning and thinking was requested, inject
     # chat_template_kwargs so vLLM-based upstreams enable reasoning mode.
     # Only send for chat_completions format; Responses API (GPT-5.5 etc.) rejects it.
