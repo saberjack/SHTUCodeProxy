@@ -2151,13 +2151,19 @@ def stop_reason_from_done(parsed: Optional[Dict[str, Any]], tool_calls: List[Dic
     if finish_reason == "tool_calls":
         return "tool_use"
     if finish_reason in ("length", "max_tokens"):
-        return "max_tokens"
+        # WHY: return "end_turn" not "max_tokens" — Claude Code treats max_tokens as truncated output and stops working,
+        # but the model has already produced valid content (just clipped by max_tokens).
+        # Returning "end_turn" lets Claude Code continue processing the output normally.
+        return "end_turn"
     # Responses API format: the done payload may be the full response object
     # or wrapped in {"response": ...}; check both for status and function_call output
     response_obj = parsed.get("response") if isinstance(parsed.get("response"), dict) else parsed
     status = response_obj.get("status") if isinstance(response_obj, dict) else None
     if status in ("incomplete", "cancelled"):
-        return "max_tokens"
+        # WHY: return "end_turn" not "max_tokens" — Claude Code treats max_tokens as truncated output and stops working,
+        # but the model has already produced valid content (just clipped by max_tokens).
+        # Returning "end_turn" lets Claude Code continue processing the output normally.
+        return "end_turn"
     output = response_obj.get("output") if isinstance(response_obj, dict) and isinstance(response_obj.get("output"), list) else None
     if isinstance(output, list):
         for item in output:
@@ -4270,6 +4276,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         log(f"{self.client_address[0]} {format % args}")
+
+    def handle(self) -> None:
+        """Suppress ConnectionResetError/BrokenPipeError from client disconnects.
+
+        WHY: Claude Code long-running requests may time out on the client side,
+        causing ConnectionResetError/BrokenPipeError spam in logs. These are
+        normal behavior — the server just needs to stop writing to the closed socket.
+        """
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            pass
+
 
 
 def main() -> None:
