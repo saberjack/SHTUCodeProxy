@@ -1087,6 +1087,41 @@ def _strip_bing_grounding(value: Any) -> Any:
     return value
 
 
+
+
+SUPPORTED_INCLUDE_VALUES = frozenset({
+    "file_search_call.results",
+    "web_search_call.results",
+    "web_search_call.action.sources",
+    "message.input_image.image_url",
+    "computer_call_output.output.image_url",
+    "code_interpreter_call.outputs",
+    "reasoning.encrypted_content",
+    "message.output_text.logprobs",
+})
+
+
+def _filter_include_values(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove unsupported 'include' values from Responses API payload.
+
+    WHY: Clients (e.g. Codex CLI) may send include values like
+    'reasoning.encryption_details' that the upstream GenAI Responses API
+    does not support, causing HTTP 400/422 errors.  Strip any unsupported
+    entries before forwarding.
+    """
+    include = payload.get("include")
+    if not isinstance(include, list) or not include:
+        return payload
+    filtered = [v for v in include if v in SUPPORTED_INCLUDE_VALUES]
+    if len(filtered) < len(include):
+        removed = [v for v in include if v not in SUPPORTED_INCLUDE_VALUES]
+        log(f"stripped unsupported include values: {removed}")
+        if filtered:
+            payload["include"] = filtered
+        else:
+            del payload["include"]
+    return payload
+
 def sanitized_upstream_payload_for_model(payload: Dict[str, Any], model_config: ModelConfig) -> Dict[str, Any]:
     result = sanitized_upstream_value_for_model(payload, model_config) if isinstance(payload, dict) else payload
     # WHY: cache_control is Anthropic-specific; no upstream API supports it.
@@ -1094,6 +1129,7 @@ def sanitized_upstream_payload_for_model(payload: Dict[str, Any], model_config: 
     if isinstance(result, dict):
         result = _strip_cache_control(result)
         result = _strip_bing_grounding(result)
+        result = _filter_include_values(result)
     # WHY: When model supports reasoning and thinking was requested, inject
     # chat_template_kwargs so vLLM-based upstreams enable reasoning mode.
     # Only send for chat_completions format; Responses API (GPT-5.5 etc.) rejects it.
@@ -2827,6 +2863,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream_payload = anthropic_messages_to_upstream(body_for_upstream, model_config, fallback_model, upstream_model, config.default_stream)
             upstream_payload = sanitized_upstream_payload_for_model(upstream_payload, model_config)
             auto_cache_marks = apply_auto_cache_control(upstream_payload) if model_config.api_format != "chat_completions" else 0
+            # WHY: apply_auto_cache_control re-adds cache_control for prompt caching,
+            # but no upstream API supports it; strip again after injection.
+            upstream_payload = _strip_cache_control(upstream_payload)
             log(
                 "request "
                 f"model={body.get('model')} route={model_config.model_id} "
@@ -2879,6 +2918,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream_payload = responses_request_to_model_upstream(body_for_upstream, model_config, fallback_model, upstream_model, config.default_stream)
             upstream_payload = sanitized_upstream_payload_for_model(upstream_payload, model_config)
             auto_cache_marks = apply_auto_cache_control(upstream_payload) if model_config.api_format != "chat_completions" else 0
+            # WHY: apply_auto_cache_control re-adds cache_control for prompt caching,
+            # but no upstream API supports it; strip again after injection.
+            upstream_payload = _strip_cache_control(upstream_payload)
             log(
                 "codex request "
                 f"model={body.get('model')} route={model_config.model_id} "
