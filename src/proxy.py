@@ -35,6 +35,7 @@ DEFAULT_UPSTREAM_URL = "https://genaiapi.shanghaitech.edu.cn/api/v1/response"
 DEFAULT_MODEL = "GPT-5.5"
 ANTHROPIC_VERSION = "2023-06-01"
 ACTIVE_CONFIG: Optional[AppConfig] = None
+DEBUG_SSE = os.environ.get('DEBUG_SSE', '0') == '1'
 LOG_FILE_MAX_BYTES = 5 * 1024 * 1024
 DSML_OPEN_RE = re.compile(r"<\s*[|｜]DSML[|｜](?:tool_calls|invoke|parameter)\b", re.IGNORECASE)
 DSML_CLOSE_RE = re.compile(r"</\s*[|｜]DSML[|｜](?:tool_calls|invoke|parameter)\s*>", re.IGNORECASE)
@@ -1087,6 +1088,57 @@ def _strip_bing_grounding(value: Any) -> Any:
     return value
 
 
+# WHY: Upstream GenAI platform rejects requests containing built-in OpenAI tools
+# (web_search_preview, file_search, code_interpreter, computer_use_preview, mcp)
+# that are not enabled for the organization, causing empty streams or 500 errors.
+# Strip them before forwarding so the request succeeds.
+# WHY: Upstream GenAI platform rejects certain built-in OpenAI tool types
+# that are not enabled for the organization, causing empty streams or errors.
+# Default: only strip types proven to cause errors (web_search).
+# Override via environment variable STRIP_TOOL_TYPES (comma-separated).
+# Set STRIP_TOOL_TYPES= to disable stripping entirely.
+_DEFAULT_STRIP_TOOL_TYPES = frozenset({
+    "web_search",
+    "web_search_preview",
+    "web_search_preview_2025_03_11",
+    "tool_search",
+})
+_env_strip = os.environ.get("STRIP_TOOL_TYPES", None)
+if _env_strip is not None:
+    if _env_strip.strip() == "":
+        UNSUPPORTED_TOOL_TYPES = frozenset()  # empty = strip nothing
+    else:
+        UNSUPPORTED_TOOL_TYPES = frozenset(t.strip() for t in _env_strip.split(",") if t.strip())
+else:
+    UNSUPPORTED_TOOL_TYPES = _DEFAULT_STRIP_TOOL_TYPES
+
+
+def _strip_unsupported_tools(value: Any) -> Any:
+    """Remove built-in OpenAI tools unsupported by upstream GenAI platform.
+
+    WHY: Codex CLI and other clients may include web_search_preview,
+    file_search, etc. in the tools list. The upstream returns empty stream
+    or {success:false, message:"Tool 'X' disabled..."} for these, causing
+    silent failures. Strip them proactively.
+    """
+    if isinstance(value, dict):
+        result = {k: _strip_unsupported_tools(v) for k, v in value.items()}
+        if "tools" in result and isinstance(result["tools"], list):
+            filtered = []
+            for tool in result["tools"]:
+                if isinstance(tool, dict) and tool.get("type") in UNSUPPORTED_TOOL_TYPES:
+                    log(f"stripped unsupported tool type={tool.get('type')} name={tool.get('name','')} (upstream disabled)")
+                    continue
+                filtered.append(tool)
+            result["tools"] = filtered
+            if not filtered:
+                del result["tools"]
+        return result
+    if isinstance(value, list):
+        return [_strip_unsupported_tools(item) for item in value]
+    return value
+
+
 
 
 SUPPORTED_INCLUDE_VALUES = frozenset({
@@ -1129,6 +1181,7 @@ def sanitized_upstream_payload_for_model(payload: Dict[str, Any], model_config: 
     if isinstance(result, dict):
         result = _strip_cache_control(result)
         result = _strip_bing_grounding(result)
+        result = _strip_unsupported_tools(result)
         result = _filter_include_values(result)
     # WHY: When model supports reasoning and thinking was requested, inject
     # chat_template_kwargs so vLLM-based upstreams enable reasoning mode.
@@ -1862,6 +1915,8 @@ def open_upstream(payload: Dict[str, Any], auth_token: str, upstream_url: str, t
 def iter_sse_lines(response: urllib.response.addinfourl) -> Iterable[Tuple[Optional[str], str]]:
     event: Optional[str] = None
     data_lines: List[str] = []
+    _raw_line_count = 0
+    _non_sse_lines: List[str] = []  # WHY: accumulate non-SSE lines to detect JSON error bodies
     while True:
         try:
             raw = response.readline()
@@ -1870,8 +1925,19 @@ def iter_sse_lines(response: urllib.response.addinfourl) -> Iterable[Tuple[Optio
         if not raw:
             if data_lines:
                 yield event, "\n".join(data_lines)
+            # WHY: If upstream returned non-SSE content (e.g. a plain JSON error body),
+            # yield it as a synthetic "non_sse_body" event so callers can detect errors
+            # instead of silently getting an empty stream.
+            if _non_sse_lines and not data_lines:
+                joined = "\n".join(_non_sse_lines)
+                yield "non_sse_body", joined
+            if DEBUG_SSE and _raw_line_count == 0:
+                log(f"DEBUG_SSE iter_sse_lines: upstream returned 0 raw lines (empty body)")
             return
         line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        _raw_line_count += 1
+        if DEBUG_SSE and _raw_line_count <= 3:
+            log(f"DEBUG_SSE raw_line[{_raw_line_count}]={line[:200]}")
         if line == "":
             if data_lines:
                 yield event, "\n".join(data_lines)
@@ -1884,6 +1950,10 @@ def iter_sse_lines(response: urllib.response.addinfourl) -> Iterable[Tuple[Optio
             event = line[6:].strip()
         elif line.startswith("data:"):
             data_lines.append(line[5:].strip())
+        else:
+            _non_sse_lines.append(line)
+            if DEBUG_SSE:
+                log(f"DEBUG_SSE non_sse_line={line[:300]}")
 
 
 def chat_tool_call_payloads(tool_calls: Any, is_delta: bool) -> List[Dict[str, Any]]:
@@ -2022,6 +2092,9 @@ def extract_text_delta(event: Optional[str], data: str) -> Tuple[str, Optional[D
         # Some vLLM versions: {"detail": "error message", "type": "..."}
         if obj.get("detail") and isinstance(obj.get("detail"), str) and not obj.get("choices"):
             return "error", {"error": {"type": "upstream_error", "message": obj["detail"]}, "raw": obj}
+        # GenAI platform format: {"success":false,"message":"Tool 'X' disabled...","code":500}
+        if obj.get("success") is False and obj.get("message") and isinstance(obj.get("message"), str):
+            return "error", {"error": {"type": "upstream_error", "message": obj["message"]}, "raw": obj}
     return "ignore", obj
 
 def parse_tool_arguments(arguments: Any) -> Dict[str, Any]:
@@ -3257,11 +3330,43 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 write_data_sse(self, "[DONE]")
                 self.close_connection = True
                 return
+        if DEBUG_SSE:
+            _tools = upstream_payload.get("tools", [])
+            log(f"DEBUG_SSE upstream_payload_tools_count={len(_tools) if isinstance(_tools, list) else 'N/A'}")
+            if isinstance(_tools, list):
+                for _ti, _t in enumerate(_tools):
+                    if isinstance(_t, dict):
+                        log(f"DEBUG_SSE tool[{_ti}] type={_t.get('type','?')} name={_t.get('name','?')}")
+        codex_upstream_error = ""
         try:
             with open_upstream(upstream_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
-                log(f"codex upstream connected model={model_config.model_id} format={model_config.api_format} status={getattr(response, 'status', 'unknown')}")
+                log(f"codex upstream connected model={model_config.model_id} format={model_config.api_format} status={getattr(response, 'status', 'unknown')} url={normalize_upstream_url(upstream_url, model_config.api_format)}")
+                _sse_count = 0
                 for event, data in iter_sse_lines(response):
+                    # WHY: If upstream returned a non-SSE body (e.g. plain JSON error),
+                    # parse it immediately as an error to avoid silent empty stream.
+                    if event == "non_sse_body":
+                        try:
+                            non_sse_obj = json.loads(data)
+                            if isinstance(non_sse_obj, dict):
+                                err = non_sse_obj.get("error")
+                                if isinstance(err, dict) and err.get("message"):
+                                    log(f"codex upstream non-SSE error model={model_config.model_id} error={err['message'][:300]}")
+                                    codex_upstream_error = err["message"]
+                                elif non_sse_obj.get("success") is False and non_sse_obj.get("message"):
+                                    log(f"codex upstream non-SSE genai error model={model_config.model_id} error={non_sse_obj['message'][:300]}")
+                                    codex_upstream_error = non_sse_obj["message"]
+                        except json.JSONDecodeError:
+                            pass
+                        if DEBUG_SSE:
+                            log(f"DEBUG_SSE non_sse_body={data[:500]}")
+                        continue
+                    _sse_count += 1
+                    if DEBUG_SSE:
+                        log(f"DEBUG_SSE event={event} data={data[:500]}")
                     kind, parsed = extract_text_delta(event, data)
+                    if DEBUG_SSE and kind != "ignore":
+                        log(f"DEBUG_SSE kind={kind} parsed_keys={list(parsed.keys()) if parsed else None}")
                     if kind == "delta" and parsed:
                         text = filter_thinking_text_delta(parsed.get("text", ""), thinking_state)
                         if text:
@@ -3359,6 +3464,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
+        if DEBUG_SSE:
+            log(f"DEBUG_SSE stream_event_count={_sse_count} output_text_parts_len={len(output_text_parts)}")
         output_text = "".join(output_text_parts)
 
         output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, body.get("tools"))
@@ -3368,7 +3475,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if not output_text and not tool_calls:
             # WHY: Check for upstream error in done_payload and retry response
             # before falling back to a generic error message.
-            codex_upstream_error = ""
+            codex_upstream_error = codex_upstream_error or ""
             if isinstance(done_payload, dict):
                 raw_obj = done_payload.get("raw", done_payload)
                 if isinstance(raw_obj, dict):
@@ -3381,13 +3488,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         codex_upstream_error = raw_obj["message"]
                     elif raw_obj.get("detail") and isinstance(raw_obj.get("detail"), str):
                         codex_upstream_error = raw_obj["detail"]
+                    elif raw_obj.get("success") is False and raw_obj.get("message") and isinstance(raw_obj.get("message"), str):
+                        codex_upstream_error = raw_obj["message"]
+                        log(f"codex stream retry returned genai platform error model={model_config.model_id} error={raw_obj['message'][:200]}")
             retry_payload = dict(upstream_payload)
             retry_payload["stream"] = False
             retry_payload.pop("stream_options", None)
             try:
                 with open_upstream(retry_payload, auth_token, upstream_url, timeout, model_config.api_format) as response:
                     raw_payload = response.read().decode("utf-8", errors="replace")
+                if DEBUG_SSE:
+                    log(f"DEBUG_SSE retry_raw_payload={raw_payload[:2000]}")
                 fallback_payload = json.loads(raw_payload)
+                if DEBUG_SSE:
+                    log(f"DEBUG_SSE retry_fallback_keys={list(fallback_payload.keys()) if isinstance(fallback_payload, dict) else type(fallback_payload).__name__}")
                 # WHY: Check if non-stream retry returned an error response
                 if isinstance(fallback_payload, dict):
                     err = fallback_payload.get("error")
