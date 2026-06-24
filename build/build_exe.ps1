@@ -5,7 +5,10 @@
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+# WHY: PyInstaller writes progress to stderr; "Stop" aborts the build on the
+# first INFO line. Use Continue so stderr is surfaced but non-fatal; real
+# failures still surface via non-zero exit codes checked below.
+$ErrorActionPreference = "Continue"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
