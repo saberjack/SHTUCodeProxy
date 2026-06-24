@@ -362,6 +362,9 @@ def read_json_body(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
     length = int(handler.headers.get("content-length", "0") or "0")
     if length > _MAX_BODY_LENGTH:
         send_json(handler, 413, {"type": "error", "error": {"type": "invalid_request_error", "message": f"Request body too large: {length} bytes (max {_MAX_BODY_LENGTH})"}})
+        # WHY: the oversized body was NOT read, so keep-alive would parse the
+        # leftover bytes as the next request line (URI Too Long). Close instead.
+        handler.close_connection = True
         raise _BodyTooLargeError()
     if length > 0:
         raw = handler.rfile.read(length)
@@ -377,6 +380,7 @@ def read_json_body(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
                 chunks.append(chunk)
                 if sum(len(c) for c in chunks) > _MAX_BODY_LENGTH:
                     send_json(handler, 413, {"type": "error", "error": {"type": "invalid_request_error", "message": f"Request body too large (max {_MAX_BODY_LENGTH})"}})
+                    handler.close_connection = True
                     raise _BodyTooLargeError()
         except (socket.timeout, OSError):
             pass
@@ -795,6 +799,11 @@ def apply_auto_cache_control(payload: Dict[str, Any]) -> int:
         return 0
     if isinstance(payload.get("messages"), list):
         return apply_auto_cache_control_to_chat_payload(payload)
+    # WHY: Responses payloads (input field) must dispatch to their own handler;
+    # without this, auto-cache was a no-op for GPT-5.5 Responses requests even
+    # though the production gate only calls it for non-chat_completions formats.
+    if isinstance(payload.get("input"), (list, str)):
+        return apply_auto_cache_control_to_responses_payload(payload)
     return 0
 
 
@@ -1133,6 +1142,9 @@ def _strip_unsupported_tools(value: Any) -> Any:
             result["tools"] = filtered
             if not filtered:
                 del result["tools"]
+                # WHY: avoid orphaned tool_choice pointing at stripped tools;
+                # upstream rejects tool_choice without tools ("tools must be set").
+                result.pop("tool_choice", None)
         return result
     if isinstance(value, list):
         return [_strip_unsupported_tools(item) for item in value]
@@ -1183,6 +1195,11 @@ def sanitized_upstream_payload_for_model(payload: Dict[str, Any], model_config: 
         result = _strip_bing_grounding(result)
         result = _strip_unsupported_tools(result)
         result = _filter_include_values(result)
+        # WHY: upstream APIs (qwen-instruct) reject tool_choice without tools.
+        # Conversion may preserve a client tool_choice referencing a named
+        # function without an explicit tools array; drop it at the boundary.
+        if "tool_choice" in result and not result.get("tools"):
+            result.pop("tool_choice", None)
     # WHY: When model supports reasoning and thinking was requested, inject
     # chat_template_kwargs so vLLM-based upstreams enable reasoning mode.
     # Only send for chat_completions format; Responses API (GPT-5.5 etc.) rejects it.
@@ -1854,10 +1871,12 @@ def responses_request_to_chat_completions(body: Dict[str, Any], fallback_model: 
     tools = [tool for tool in (responses_tool_to_chat_tool(item) for item in body.get("tools", [])) if tool]
     if tools:
         payload["tools"] = tools
-    # WHY: Only set tool_choice when tools are present. Upstream APIs
-    # (e.g. qwen-instruct) reject requests with tool_choice but no tools:
-    # "When using `tool_choice`, `tools` must be set."
-    if body.get("tool_choice") is not None and tools:
+    # WHY: Convert tool_choice format regardless of tools; the no-tools guard
+    # (qwen-instruct rejects tool_choice without tools) is enforced at the
+    # upstream boundary in sanitized_upstream_payload_for_model so the
+    # conversion preserves client intent for clients that reference a named
+    # function without an explicit tools array.
+    if body.get("tool_choice") is not None:
         payload["tool_choice"] = responses_tool_choice_to_chat(body["tool_choice"])
     # If messages contain tool_calls/tool role but payload has no tools definition,
     # upstream APIs (e.g. glm-chat) require a tools field to accept tool_calls messages.
@@ -2617,6 +2636,7 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
     has_real_thinking = False
     _reasoning_as_text_fallback = ""
     _wants_thinking = False  # WHY: Reasoning always emitted as text, never as thinking block
+    _tool_use_items: List[Dict[str, Any]] = []  # deferred to preserve [text, tool_use] order
     for item in output:
         if not isinstance(item, dict):
             continue
@@ -2642,7 +2662,7 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
             fc_name = item.get("name")
             if not fc_name:
                 continue
-            content.append({
+            _tool_use_items.append({
                 "type": "tool_use",
                 "id": item.get("call_id") or item.get("id") or f"toolu_proxy_{now_ms()}_{uuid.uuid4().hex[:8]}",
                 "name": fc_name,
@@ -2658,6 +2678,9 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
             content.append({"type": "text", "text": "🤔 Thinking\n````\n" + _reasoning_as_text_fallback + "\n````"})
     elif output_text:
         content.append({"type": "text", "text": output_text})
+    # WHY: Append deferred tool_use items AFTER text so Anthropic content order
+    # is [text, tool_use], matching upstream Responses output ordering.
+    content.extend(_tool_use_items)
     if not content:
         content.append({"type": "text", "text": ""})
     # WHY: Only inject redacted_thinking when client explicitly requested thinking
@@ -2795,7 +2818,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("access-control-allow-origin", "*")
-        self.send_header("access-control-allow-methods", "GET,POST,OPTIONS")
+        self.send_header("access-control-allow-methods", "GET,POST,DELETE,OPTIONS")
         self.send_header("access-control-allow-headers", "*")
         self.end_headers()
 
@@ -2853,6 +2876,29 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         send_json(self, 404, {"type": "error", "error": {"type": "not_found_error", "message": "Not found"}})
 
+    def do_DELETE(self) -> None:
+        # Drain any request body so it cannot corrupt the next keep-alive request.
+        _length = int(self.headers.get("content-length", "0") or "0")
+        if _length > 0:
+            try:
+                self.rfile.read(_length)
+            except Exception:
+                pass
+        # DELETE /v1/responses/{response_id} - Codex cleanup of stored responses.
+        # WHY: Stateless proxy stores nothing locally and upstream GenAI gateway only
+        # supports POST (GET/DELETE return business-layer 405), so acknowledge with
+        # 204 No Content to satisfy the client without hitting upstream.
+        rp = self.route_path()
+        for prefix in ("/v1/responses/", "/responses/", "/codex/v1/responses/"):
+            if rp.startswith(prefix):
+                remainder = rp[len(prefix):]
+                if remainder and "/" not in remainder:
+                    self.send_response(204)
+                    self.send_header("access-control-allow-origin", "*")
+                    self.end_headers()
+                    return
+        send_json(self, 404, {"type": "error", "error": {"type": "not_found_error", "message": "Not found"}})
+
     def do_POST(self) -> None:
         route_path = self.route_path()
         log("do_POST path={} raw_path={}".format(route_path, self.path))
@@ -2860,12 +2906,30 @@ class ProxyHandler(BaseHTTPRequestHandler):
             try:
                 body = read_json_body(self)
                 input_tokens = estimate_anthropic_input_tokens(body)
+            except _BodyTooLargeError:
+                return  # 413 already sent by read_json_body
             except Exception:
                 input_tokens = 1
             send_json(self, 200, {"input_tokens": input_tokens})
             return
         if route_path in ("/v1/responses/compact", "/responses/compact", "/v1/v1/responses/compact", "/codex/v1/responses/compact"):
             self.handle_responses_compact()
+            return
+        # POST /v1/responses/input_tokens - Codex token counting. Upstream does not
+        # implement this endpoint (falls back to a full /responses call), so estimate
+        # locally via the same tokenizer-approx used for /v1/messages/count_tokens.
+        if route_path in ("/v1/responses/input_tokens", "/responses/input_tokens", "/codex/v1/responses/input_tokens"):
+            try:
+                body = read_json_body(self)
+            except _BodyTooLargeError:
+                return  # 413 already sent by read_json_body
+            except Exception:
+                send_json(self, 400, {"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid JSON in request body"}})
+                return
+            count = estimate_value_tokens(body.get("input"))
+            count += estimate_value_tokens(body.get("instructions"))
+            count += estimate_value_tokens(body.get("tools"))
+            send_json(self, 200, {"input_tokens": max(1, count), "object": "input_token_count"})
             return
         if route_path in ("/v1/responses", "/responses", "/codex/v1/responses"):
             self.handle_responses_post()

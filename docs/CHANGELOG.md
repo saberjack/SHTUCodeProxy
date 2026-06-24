@@ -1,5 +1,33 @@
 # Changelog
 
+## v4.8.5 (2026-06-22)
+
+Codex Responses API endpoint coverage + audit-driven bugfix release.
+
+### Added
+
+- `POST /v1/responses/input_tokens`: Local token-count estimation endpoint for Codex CLI. Upstream GenAI gateway does not implement this endpoint (falls back to a full `/responses` call), so the proxy estimates locally via the same tokenizer-approximation used for `/v1/messages/count_tokens`, returning `{input_tokens, object: input_token_count}` without consuming a model call.
+- `DELETE /v1/responses/{response_id}`: Returns 204 No Content. Stateless proxy stores nothing locally and upstream only supports POST (GET/DELETE return business-layer 405), so the stub acknowledges Codex cleanup requests without hitting upstream.
+
+### Fixed
+
+- `src/VERSION` was stuck at 4.8.2 (root VERSION was 4.8.4); `updater.current_version()` reads `src/VERSION` first, so the running 4.8.4 build falsely reported v4.8.2 and offered a spurious self-update. Synced both VERSION files to 4.8.5.
+- `do_OPTIONS` advertised `GET,POST,OPTIONS` only; the new `do_DELETE` handler was unreachable through a CORS preflight. Now advertises `GET,POST,DELETE,OPTIONS`.
+- Double-response on oversized bodies: `read_json_body` sent 413 then raised `_BodyTooLargeError`; the `except Exception` in the `input_tokens` and `count_tokens` routes then sent a second 200, corrupting keep-alive (414 URI Too Long). Now catches `_BodyTooLargeError` to return early, and closes the connection so the unread oversized body cannot pollute the next request.
+- `POST /v1/responses/input_tokens` returned 200 with `input_tokens:1` on malformed JSON; now returns 400.
+- Dead auto-cache: `apply_auto_cache_control` only dispatched chat payloads (`messages`), so Responses payloads (`input`) — the only path the production gate runs auto-cache on — got 0 marks. Now dispatches to `apply_auto_cache_control_to_responses_payload`.
+- `do_DELETE` did not drain the request body, risking keep-alive pollution; now drains `Content-Length` bytes.
+- `_strip_unsupported_tools` could leave an orphaned `tool_choice` after deleting all tools, risking upstream 400 ("tools must be set"); now clears `tool_choice`.
+- `responses_json_to_anthropic_message` emitted `[tool_use, text]` instead of `[text, tool_use]`; function_call items are now appended after text to match Anthropic ordering.
+- smoke `exercise_cache_control_passthrough` now tests the real production auto-cache path (Responses) and reflects the intentional skip of string system content on chat payloads.
+- smoke `app.py status` subprocess now runs with `cwd` at the repo root so the relative `app.py` path resolves.
+
+### Validation
+
+- `python -m py_compile src/proxy.py tests/smoke_test.py` PASS.
+- Live multi-dim HTTP on test port: OPTIONS advertises DELETE, bad JSON -> 400, oversized -> 413 (single response, connection closed), DELETE with body -> 204, auto-cache Responses marks >= 2, content order [text, tool_use], version reports 4.8.5.
+- smoke `exercise_cache_control_passthrough` and `exercise_id_uniqueness_and_non_stream_json` now PASS.
+
 ## v4.8.0 (2026-06-11)
 
 Claude Code auto mode safety classifier compatibility release.

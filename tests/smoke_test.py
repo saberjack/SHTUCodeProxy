@@ -254,6 +254,10 @@ def exercise_cache_control_passthrough() -> None:
     assert_true("cache_read_input_tokens" in usage_cache_debug({"cache_read_input_tokens": 12}), "Anthropic cache read usage should be logged")
     assert_true("details_cached_tokens" in usage_cache_debug({"input_tokens_details": {"cached_tokens": 34}}), "OpenAI cached token usage should be logged")
 
+    # WHY: Codex Chat payload auto-cache marks tools but intentionally skips
+    # string system content: GLM/DeepSeek reject array content on messages
+    # and return HTTP 500.  Production never calls auto-cache on chat payloads
+    # (the gate skips chat_completions format), so only tool marking is expected.
     codex_chat_without_cache = responses_request_to_chat_completions({
         "model": "glm-chat",
         "input": [
@@ -265,12 +269,28 @@ def exercise_cache_control_passthrough() -> None:
         "tools": [{"type": "function", "name": "read_file", "parameters": {"type": "object"}}],
     }, "fallback", "glm-chat")
     auto_marks = apply_auto_cache_control(codex_chat_without_cache)
-    assert_true(auto_marks >= 2, "Codex Chat payload should get automatic cache boundaries")
+    assert_true(auto_marks >= 1, "Codex Chat payload should mark tool definitions")
     assert_true(codex_chat_without_cache["tools"][0]["cache_control"] == cache_control, "auto cache should mark tool definitions")
-    assert_true(any(part.get("cache_control") == cache_control for part in codex_chat_without_cache["messages"][0]["content"]), "auto cache should mark system/developer content")
     assert_true(not has_cache_metadata(codex_chat_without_cache["messages"][-1]), "auto cache should not mark the current user turn")
-    responses_without_cache = responses_request_to_upstream({"model": "GPT-5.5", "input": [{"role": "developer", "content": [{"type": "input_text", "text": "stable"}]}]}, "fallback", "GPT-5.5")
-    assert_true(apply_auto_cache_control(responses_without_cache) == 0 and not has_cache_metadata(responses_without_cache), "Responses payloads should not get unsupported cache_control automatically")
+    # WHY: Codex Responses payload is the real production auto-cache path (the
+    # gate runs auto-cache only for non-chat formats).  Developer content is a
+    # list here, so cache boundaries apply to tools + developer content.
+    codex_responses_without_cache = responses_request_to_upstream({
+        "model": "GPT-5.5",
+        "input": [
+            {"role": "developer", "content": [{"type": "input_text", "text": "stable developer prompt"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "first question"}]},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "current question"}]},
+        ],
+        "tools": [{"type": "function", "name": "read_file", "parameters": {"type": "object"}}],
+    }, "fallback", "GPT-5.5")
+    resp_marks = apply_auto_cache_control(codex_responses_without_cache)
+    assert_true(resp_marks >= 2, "Codex Responses payload should get automatic cache boundaries")
+    assert_true(codex_responses_without_cache["tools"][0]["cache_control"] == cache_control, "auto cache should mark Responses tool definitions")
+    _dev_item = codex_responses_without_cache["input"][0]
+    assert_true(any(part.get("cache_control") == cache_control for part in _dev_item["content"]), "auto cache should mark Responses developer content")
+    assert_true(not has_cache_metadata(codex_responses_without_cache["input"][-1]), "auto cache should not mark the current Responses user turn")
 
 
 def exercise_file_logging(tmpdir: Path) -> None:
@@ -1530,7 +1550,7 @@ def main() -> int:
         exercise_headless_cli_model_config(tmpdir)
         exercise_headless_apply_config(tmpdir)
         exercise_background_start_regressions()
-        app_cli = subprocess.run([sys.executable, "app.py", "status"], capture_output=True, text=True, timeout=10)
+        app_cli = subprocess.run([sys.executable, "app.py", "status"], cwd=str(Path(__file__).resolve().parent.parent), capture_output=True, text=True, timeout=10)
         assert_true(app_cli.returncode == 0 and "Proxy URL:" in app_cli.stdout, "app.py should pass CLI arguments through without requiring a GUI")
         exercise_multi_tool_call_delta()
         exercise_cumulative_tool_call_delta()

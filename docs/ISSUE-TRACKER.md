@@ -181,6 +181,132 @@
 
 -->
 
+### #008 — Codex Responses API 新增端点 input_tokens / DELETE 未实现
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | Codex Responses API 新增端点 input_tokens / DELETE 未实现 |
+| **状态** | 🟢 已修复 |
+| **优先级** | P2 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | API 审计 |
+| **影响范围** | Codex CLI `/v1/responses/input_tokens` 与 `DELETE /v1/responses/{id}` |
+| **现象** | 官方 OpenAI Responses API 新增 POST /responses/input_tokens 和 DELETE /responses/{id} 端点，代理未实现；input_tokens 返回 404，DELETE 无 do_DELETE 方法 |
+| **根因** | 代理路由表未覆盖这两个新增端点；实测上游 GenAI 网关仅支持 POST（GET/DELETE 返回业务层 405），且 /responses/input_tokens 上游未实现（回退成普通 /responses 调用） |
+| **修复提交** | 待提交 (dev/feat-input-tokens-and-delete) |
+| **开发记录** | docs/dev-notes/2026-06-22-responses-input-tokens-and-delete.md |
+| **回归测试** | py_compile PASS；端到端 8099 端口 4/4 PASS（input_tokens 返回 {input_tokens,object}、DELETE 返回 204、404 兜底）；既有 cache-control smoke 断言失败为已知历史问题，非本次引入 |
+
+### #009 — src/VERSION 落后发布版本导致更新误报
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | src/VERSION 落后发布版本导致更新误报 |
+| **状态** | 🟢 已修复 |
+| **优先级** | P1 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | 代码审计 |
+| **影响范围** | updater.current_version() / check-update |
+| **现象** | src/VERSION 停在 4.8.2，根 VERSION 为 4.8.4；运行 4.8.4 构建却报告 v4.8.2，触发虚假更新提示 |
+| **根因** | current_version() 优先读 src/VERSION，发布时未同步 |
+| **修复** | src/VERSION 与根 VERSION 同步至 4.8.5 |
+| **回归测试** | current_version() 返回 4.8.5 |
+
+### #010 — CORS 预检未声明 DELETE
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | do_OPTIONS 未声明 DELETE，新增 do_DELETE 对 CORS 客户端不可达 |
+| **状态** | 🟢 已修复 |
+| **优先级** | P1 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | 代码审计 |
+| **影响范围** | DELETE /v1/responses/{id} |
+| **现象** | OPTIONS 返回 GET,POST,OPTIONS，浏览器预检拒绝 DELETE |
+| **根因** | do_OPTIONS 方法列表未随 do_DELETE 更新 |
+| **修复** | access-control-allow-methods 改为 GET,POST,DELETE,OPTIONS |
+| **回归测试** | OPTIONS 预检返回含 DELETE |
+
+### #011 — 超大请求体双重响应破坏 keep-alive
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | input_tokens/count_tokens 超大 body 触发 413 后再发 200 |
+| **状态** | 🟢 已修复 |
+| **优先级** | P2 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | 代码审计（实测复现） |
+| **影响范围** | POST /v1/responses/input_tokens、/v1/messages/count_tokens |
+| **现象** | read_json_body 发 413 并抛 _BodyTooLargeError，except Exception 捕获后再发 200；日志同请求出现 413+200，后续连接出现 414 URI Too Long |
+| **根因** | 宽泛 except 捕获了已响应的 _BodyTooLargeError 并继续发送 |
+| **修复** | 捕获 _BodyTooLargeError 直接 return；并设置 close_connection=True 避免未读 body 污染下一请求 |
+| **回归测试** | 超大请求仅 413，连接被干净关闭 |
+
+### #012 — 自动缓存对 Responses 载荷无效
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | apply_auto_cache_control 未分发 Responses 载荷，生产自动缓存为空操作 |
+| **状态** | 🟢 已修复 |
+| **优先级** | P2 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | 代码审计 |
+| **影响范围** | GPT-5.5 Responses 请求自动缓存 |
+| **现象** | apply_auto_cache_control 仅处理 messages 载荷，Responses（input）直接 return 0；而生产网关仅对非 chat 格式调用，导致 Responses 从未被缓存 |
+| **根因** | 缺少 input 字段分发到 apply_auto_cache_control_to_responses_payload |
+| **修复** | 增加 input 分发分支；smoke 改为测试真实生产路径 |
+| **回归测试** | Responses 载荷自动缓存 marks >= 2 |
+
+### #013 — do_DELETE 未消费请求体
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | do_DELETE 未读取请求体，keep-alive 残留字节污染 |
+| **状态** | 🟢 已修复 |
+| **优先级** | P3 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | 代码审计 |
+| **影响范围** | DELETE /v1/responses/{id} |
+| **现象** | 带 Content-Length 的 DELETE 不读 body，残留字节污染下一请求 |
+| **修复** | do_DELETE 开头按 content-length 读取并丢弃 body |
+| **回归测试** | 带 body 的 DELETE 返回 204 且不污染连接 |
+
+### #014 — 剥离全部工具后 tool_choice 孤立
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | _strip_unsupported_tools 删除全部工具后未清 tool_choice |
+| **状态** | 🟢 已修复 |
+| **优先级** | P3 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | 代码审计 |
+| **影响范围** | sanitized_upstream_payload_for_model |
+| **现象** | 剥离全部不支持工具后 del tools，但 tool_choice 残留，可能触发上游 400 |
+| **修复** | del tools 时同步 pop tool_choice |
+| **回归测试** | 代码审查确认；主路径非函数工具在转换阶段已丢弃，属防御性加固 |
+
+### #015 — 非流式 Responses JSON 转 Anthropic 顺序颠倒
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | responses_json_to_anthropic_message 输出 [tool_use, text] 而非 [text, tool_use] |
+| **状态** | 🟢 已修复 |
+| **优先级** | P2 |
+| **发现日期** | 2026-06-22 |
+| **修复日期** | 2026-06-22 |
+| **发现人** | smoke 暴露 |
+| **影响范围** | 非流式 Responses JSON → Anthropic 消息转换 |
+| **现象** | function_call 在循环内立即 append，text 在循环后 append，导致顺序颠倒 |
+| **修复** | function_call 收集到 _tool_use_items，text 之后再 extend |
+| **回归测试** | content 顺序为 [text, tool_use] |
+
 ---
 
 ## 统计
@@ -188,8 +314,8 @@
 | 优先级 | 🔴 待处理 | 🟡 排查中 | 🔵 修复中 | 🟢 已修复 | ⚪ 已关闭 |
 |--------|-----------|-----------|-----------|-----------|-----------|
 | P0     | 0         | 0         | 0         | 1         | 0         |
-| P1     | 0         | 0         | 0         | 6         | 0         |
-| P2     | 0         | 0         | 0         | 0         | 0         |
-| **合计** | **0**     | **0**     | **0**     | **7**     | **0**     |
+| P1     | 0         | 0         | 0         | 9         | 0         |
+| P2     | 0         | 0         | 0         | 3         | 0         |
+| **合计** | **0**     | **0**     | **0**     | **14**    | **0**     |
 
-> 最后更新: 2026-06-08
+> 最后更新: 2026-06-22（审计修复）
