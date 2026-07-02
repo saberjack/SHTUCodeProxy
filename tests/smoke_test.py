@@ -121,6 +121,39 @@ def exercise_claude_auto_classifier_detection() -> None:
     assert_true(not is_claude_auto_classifier_request(regular), "regular tool requests should keep existing thinking behavior")
 
 
+def exercise_classifier_suppresses_reasoning_for_enable_thinking_model() -> None:
+    # WHY: Claude Code auto mode classifier expects a clean ALLOW/DENY text verdict.
+    # A model with enable_thinking=True (e.g. glm-chat) would otherwise always get
+    # chat_template_kwargs={"enable_thinking": True}, causing it to return a reasoning
+    # transcript merged with the verdict ("🤔 Thinking...ALLOW"), which the classifier
+    # cannot parse — producing "could not evaluate this action" for every command.
+    thinking_model = ModelConfig(
+        name="GLM-Test",
+        model_id="glm-chat",
+        base_url="https://example.invalid/v1/start",
+        api_key="test-key",
+        upstream_model="glm-chat",
+        api_format="chat_completions",
+        supports_reasoning=True,
+        enable_thinking=True,
+    )
+    classifier_body = {
+        "model": "glm-chat",
+        "system": "You are a security monitor for autonomous AI coding agents. Output <block>yes</block> or <block>no</block> during the Classification Process.",
+        "messages": [{"role": "user", "content": "Bash echo hello"}],
+    }
+    sanitized_classifier = sanitized_anthropic_body_for_model(classifier_body, thinking_model)
+    assert_true(not sanitized_classifier.get("_reasoning_enabled"), "classifier request must not enable thinking for enable_thinking models")
+
+    regular_body = {
+        "model": "glm-chat",
+        "system": "You are a helpful assistant.",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    sanitized_regular = sanitized_anthropic_body_for_model(regular_body, thinking_model)
+    assert_true(sanitized_regular.get("_reasoning_enabled"), "regular request must still enable thinking for enable_thinking models")
+
+
 
 def exercise_tool_call_translation() -> None:
     body = {
@@ -1533,6 +1566,7 @@ def main() -> int:
         assert_true(portable_claude_path("") != "", "portable claude path fallback empty")
         assert_true(portable_settings_path("").endswith(str(Path(".claude") / "settings.json")), "settings fallback mismatch")
         exercise_claude_auto_classifier_detection()
+        exercise_classifier_suppresses_reasoning_for_enable_thinking_model()
         exercise_anthropic_stream_delta_usage_shape(tmpdir)
         exercise_tool_call_translation()
         exercise_cache_control_passthrough()
