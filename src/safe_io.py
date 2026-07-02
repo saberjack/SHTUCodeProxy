@@ -39,7 +39,17 @@ def _process_is_running(pid: int) -> bool:
 
 @contextmanager
 def file_lock(lock_name: str, *, timeout: float = 5.0):
-    lock_dir = Path(gettempdir()) / "SHTUCodeProxy"
+    # WHY: Use per-user lock directory to avoid cross-user permission conflicts
+    # on shared /tmp. On Linux, the first user creates /tmp/SHTUCodeProxy with
+    # 0o755, blocking other users from creating lock files. Windows %TEMP% is
+    # already per-user, so no uid suffix needed there.
+    _lock_base = Path(gettempdir())
+    try:
+        _uid = os.getuid()
+    except AttributeError:
+        lock_dir = _lock_base / "SHTUCodeProxy"
+    else:
+        lock_dir = _lock_base / f"SHTUCodeProxy-{_uid}"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock = lock_dir / f"{lock_name}.lock"
     deadline = time.time() + timeout
