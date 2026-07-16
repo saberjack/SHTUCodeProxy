@@ -1108,7 +1108,10 @@ class IosProxyApp(QMainWindow):
         self.base_url_edit.setText(model.base_url)
         self.api_key_edit.setText(model.api_key)
         self.upstream_model_edit.setText(model.upstream_model)
+        # WHY: 屏蔽信号，避免 setCurrentText 触发 on_api_format_changed，后者会把已保存的 base_url 覆盖成校内 genai 默认 URL（点 Apply 后 URL 回退的根因）
+        self.api_format_combo.blockSignals(True)
         self.api_format_combo.setCurrentText(getattr(model, "api_format", DEFAULT_API_FORMAT) or DEFAULT_API_FORMAT)
+        self.api_format_combo.blockSignals(False)
         self.supports_image_check.setChecked(bool(getattr(model, "supports_image", False)))
         self.supports_audio_check.setChecked(bool(getattr(model, "supports_audio", False)))
         self.supports_video_check.setChecked(bool(getattr(model, "supports_video", False)))

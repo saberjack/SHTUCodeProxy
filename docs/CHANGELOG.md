@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.8.8 (2026-07-16)
+
+GUI model config bugfix release.
+
+### Fixed
+
+- **Base URL reverted to the campus GenAI default after clicking Apply** (user-reported): loading a model whose API Format differed from the currently-shown combo value caused `api_format_combo.setCurrentText` to fire `on_api_format_changed`, which unconditionally overwrote `base_url_edit` with `DEFAULT_RESPONSES_URL` / `DEFAULT_CHAT_COMPLETIONS_URL` (`https://genaiapi.shanghaitech.edu.cn/...`). Because `apply_model` calls `refresh_model_list` (which loads model 0) before re-selecting the edited model, any `chat_completions` model edited under a default `GPT-5.5` (responses) list got its URL clobbered to the GenAI default; a second Apply then persisted the default URL. `load_model` now blocks combo signals while setting the format programmatically, so `on_api_format_changed` only fires on genuine user interaction. Custom/external URLs are preserved across selection and Apply.
+- Synced `src/VERSION` (was stuck at 4.8.5) to 4.8.8 alongside root `VERSION`; `updater.current_version()` reads `src/VERSION` first, so a mismatch would cause a spurious self-update offer.
+
+### Validation
+
+- New regression `tests/test_model_url_revert.py`: offscreen `IosProxyApp` across 3 scenarios (cross-format switch, Apply-then-reload, Apply round-trip). Verified red-without-fix / green-with-fix.
+
 ## v4.8.5 (2026-06-22)
 
 Codex Responses API endpoint coverage + audit-driven bugfix release.

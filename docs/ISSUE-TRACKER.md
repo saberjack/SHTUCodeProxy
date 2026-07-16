@@ -307,6 +307,24 @@
 | **修复** | function_call 收集到 _tool_use_items，text 之后再 extend |
 | **回归测试** | content 顺序为 [text, tool_use] |
 
+### #016 — 模型配置 Apply 后 Base URL 回退成校内 genai 默认 URL
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | 修改模型配置点 Apply 后 Base URL 被覆盖成 genai 默认 URL，无法接入外部 URL |
+| **状态** | 🟢 已修复 |
+| **优先级** | P1 |
+| **发现日期** | 2026-07-16 |
+| **修复日期** | 2026-07-16 |
+| **发现人** | 上线反馈 |
+| **影响范围** | GUI 模型配置；API Format 与模型0 不同的模型（如 chat_completions 类）改完点 Apply 触发回退 |
+| **现象** | 改完 Base URL 点 Apply，URL 变回 `https://genaiapi.shanghaitech.edu.cn/...`；再点一次则 config 被写回默认 URL |
+| **根因** | `load_model` 中 `api_format_combo.setCurrentText` 触发 `on_api_format_changed`，后者无条件覆盖 `base_url_edit` 为校内默认 URL |
+| **修复** | `load_model` 设置 combo 时 `blockSignals`，避免程序化加载触发覆盖；`on_api_format_changed` 逻辑不变 |
+| **开发记录** | `docs/dev-notes/2026-07-16-model-url-revert-on-apply.md` |
+| **回归测试** | `tests/test_model_url_revert.py`：撤修复 3 场景全 FAIL，加修复全 PASS |
+
+
 ---
 
 ## 统计
@@ -314,8 +332,8 @@
 | 优先级 | 🔴 待处理 | 🟡 排查中 | 🔵 修复中 | 🟢 已修复 | ⚪ 已关闭 |
 |--------|-----------|-----------|-----------|-----------|-----------|
 | P0     | 0         | 0         | 0         | 1         | 0         |
-| P1     | 0         | 0         | 0         | 9         | 0         |
+| P1     | 0         | 0         | 0         | 10        | 0         |
 | P2     | 0         | 0         | 0         | 3         | 0         |
-| **合计** | **0**     | **0**     | **0**     | **14**    | **0**     |
+| **合计** | **0**     | **0**     | **0**     | **15**    | **0**     |
 
-> 最后更新: 2026-06-22（审计修复）
+> 最后更新: 2026-07-16（#016 模型 URL 回退修复）
