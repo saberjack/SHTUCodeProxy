@@ -2163,7 +2163,7 @@ def codex_function_call_item(tool_call: Dict[str, Any], offset: int = 0, normali
             if isinstance(fallback, str) and fallback.strip():
                 arguments["command"] = shell_command_argv(fallback)
     return {
-        "id": tool_call.get("id") or f"fc_proxy_{now_ms()}_{offset}",
+        "id": f"fc_proxy_{now_ms()}_{offset}",
         "type": "function_call",
         "status": "completed",
         "call_id": tool_call.get("id") or f"call_proxy_{now_ms()}_{offset}",
@@ -2787,11 +2787,12 @@ def _codex_emit_recovered_response(emit_fn, request_id: str, message_id: str, co
     output.append(text_item)
     for tool_call in tool_outputs:
         call_id = tool_call.get("call_id", tool_call.get("id", f"call_{response_id()}"))
-        item = {"id": call_id, "type": "function_call", "name": tool_call.get("name", ""), "call_id": call_id, "arguments": tool_call.get("arguments", "")}
+        fc_id = f"fc_proxy_{now_ms()}_{len(output)}"
+        item = {"id": fc_id, "type": "function_call", "name": tool_call.get("name", ""), "call_id": call_id, "arguments": tool_call.get("arguments", "")}
         output_index = len(output)
         emit_fn("response.output_item.added", {"output_index": output_index, "item": dict(item, status="in_progress")})
-        emit_fn("response.function_call_arguments.delta", {"output_index": output_index, "item_id": call_id, "call_id": call_id, "delta": item["arguments"]})
-        emit_fn("response.function_call_arguments.done", {"output_index": output_index, "item_id": call_id, "call_id": call_id, "arguments": item["arguments"]})
+        emit_fn("response.function_call_arguments.delta", {"output_index": output_index, "item_id": fc_id, "call_id": call_id, "delta": item["arguments"]})
+        emit_fn("response.function_call_arguments.done", {"output_index": output_index, "item_id": fc_id, "call_id": call_id, "arguments": item["arguments"]})
         emit_fn("response.output_item.done", {"output_index": output_index, "item": item})
         output.append(item)
     # Emit response completed
