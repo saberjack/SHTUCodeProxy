@@ -2723,7 +2723,7 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
     # didn't return one. This enables Claude Code auto mode (Bug #2).
     # Use visible thinking with placeholder text instead of redacted_thinking
     # to avoid garbled output from opaque data.
-    if thinking_requested(payload) and not has_real_thinking:
+    if thinking_requested(payload) and not has_real_thinking and _show_thinking:
         if not any(block.get("type") in ("thinking", "redacted_thinking") for block in content):
             content = [{"type": "thinking", "thinking": _THINKING_PLACEHOLDER_TEXT}] + content
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
@@ -3960,7 +3960,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # doesn't support native reasoning. This enables Claude Code auto mode (Bug #2).
         # Use visible thinking with placeholder text instead of redacted_thinking
         # to avoid garbled output from opaque data.
-        if thinking_requested(body) and (not _model_supports_reasoning or not getattr(model_config, 'show_thinking', True)):
+        if thinking_requested(body) and not _model_supports_reasoning and getattr(model_config, 'show_thinking', True):
             write_sse(self, "content_block_start", {
                 "type": "content_block_start",
                 "index": _thinking_block_index,
