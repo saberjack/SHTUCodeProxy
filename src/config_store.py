@@ -103,6 +103,7 @@ class ModelConfig:
     max_context_tokens: int = 0  # 0 means unknown/use global default
     supports_reasoning: bool = False
     enable_thinking: bool = False  # Send chat_template_kwargs: {enable_thinking: true} to upstream for vLLM models
+    show_thinking: bool = True  # WHY: When False, model still reasons upstream but reasoning content is hidden from the user
 
     def __post_init__(self):
         # WHY: enable_thinking implies the model returns reasoning_content,
@@ -129,6 +130,7 @@ class ModelConfig:
             max_context_tokens=int(data.get("max_context_tokens") or data.get("max_tokens") or default_max_context_tokens(model_id, upstream_model)),
             supports_reasoning=bool_from_config(data.get("supports_reasoning"), default_supports_reasoning(model_id, upstream_model)),
             enable_thinking=bool_from_config(data.get("enable_thinking"), "deepseek" in f"{model_id} {upstream_model}".lower() or "glm" in f"{model_id} {upstream_model}".lower()),
+            show_thinking=bool_from_config(data.get("show_thinking"), True),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -146,6 +148,7 @@ class ModelConfig:
             "max_context_tokens": self.max_context_tokens,
             "supports_reasoning": self.supports_reasoning,
             "enable_thinking": self.enable_thinking,
+            "show_thinking": self.show_thinking,
         }
 
 

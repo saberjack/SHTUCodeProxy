@@ -46,6 +46,7 @@ from proxy import (
     log,
     apply_auto_cache_control,
     has_cache_metadata,
+    hide_reasoning_in_output,
 )
 
 
@@ -1529,6 +1530,109 @@ def exercise_multimodal_capability_config() -> None:
     assert_true(cleaned_codex_payload["tools"][0]["function"]["parameters"]["type"] == "object", "Final sanitizer should not inspect ordinary tool JSON schema type values")
 
 
+
+def exercise_show_thinking_toggle_hides_reasoning() -> None:
+    # WHY: Users may want the model to reason upstream (enable_thinking) but
+    # hide the reasoning content from the response. show_thinking=False must
+    # suppress reasoning display across all conversion paths while preserving
+    # the actual answer text.
+
+    # --- Config round-trip ---
+    visible_model = ModelConfig(
+        name="Vis", model_id="vis-model", base_url="https://example.invalid/v1/start",
+        api_key="k", upstream_model="vis-up", api_format="chat_completions",
+        supports_reasoning=True, enable_thinking=True, show_thinking=True,
+    )
+    hidden_model = ModelConfig(
+        name="Hid", model_id="hid-model", base_url="https://example.invalid/v1/start",
+        api_key="k", upstream_model="hid-up", api_format="chat_completions",
+        supports_reasoning=True, enable_thinking=True, show_thinking=False,
+    )
+    assert_true(visible_model.show_thinking is True, "show_thinking should default True when set")
+    assert_true(hidden_model.show_thinking is False, "show_thinking should be False when set")
+    roundtrip = ModelConfig.from_dict(hidden_model.to_dict())
+    assert_true(roundtrip.show_thinking is False, "show_thinking=False must survive to_dict/from_dict round-trip")
+    default_model = ModelConfig.from_dict({"model_id": "d", "base_url": "u", "api_key": "k"})
+    assert_true(default_model.show_thinking is True, "show_thinking must default True when absent from config dict")
+
+    # --- chat_completion_json_to_responses: hide suppresses reasoning merge ---
+    chat_with_reasoning = {
+        "choices": [{"message": {
+            "content": "the answer",
+            "reasoning_content": "secret deliberation",
+        }}],
+    }
+    visible_resp = chat_completion_json_to_responses(chat_with_reasoning, "hid-model", 10, None, show_thinking=True)
+    hidden_resp = chat_completion_json_to_responses(chat_with_reasoning, "hid-model", 10, None, show_thinking=False)
+
+    def _output_text(payload):
+        for item in payload.get("output", []):
+            if isinstance(item, dict) and item.get("type") == "message":
+                for part in item.get("content", []):
+                    if isinstance(part, dict) and part.get("text"):
+                        return part["text"]
+        return ""
+
+    assert_true("secret deliberation" in _output_text(visible_resp), "show_thinking=True must surface reasoning text")
+    assert_true("the answer" in _output_text(hidden_resp), "show_thinking=False must preserve the answer")
+    assert_true("secret deliberation" not in _output_text(hidden_resp), "show_thinking=False must hide reasoning text")
+
+    # --- reasoning-only response: hide must still return the answer ---
+    chat_reasoning_only = {
+        "choices": [{"message": {
+            "content": "",
+            "reasoning_content": "the actual answer",
+        }}],
+    }
+    hidden_only = chat_completion_json_to_responses(chat_reasoning_only, "hid-model", 10, None, show_thinking=False)
+    assert_true("the actual answer" in _output_text(hidden_only), "show_thinking=False must use reasoning as answer when no content")
+
+    # --- responses_json_to_anthropic_message: hide suppresses thinking text ---
+    responses_payload = {
+        "output": [
+            {"id": "r1", "type": "reasoning", "status": "completed",
+             "summary": [{"type": "summary_text", "text": "hidden reasoning here"}]},
+            {"id": "m1", "type": "message", "status": "completed", "role": "assistant",
+             "content": [{"type": "output_text", "text": "final answer"}]},
+        ],
+        "usage": {"input_tokens": 5, "output_tokens": 3},
+    }
+    visible_anthropic = responses_json_to_anthropic_message(dict(responses_payload), visible_model)
+    hidden_anthropic = responses_json_to_anthropic_message(dict(responses_payload), hidden_model)
+
+    def _anthropic_text(msg):
+        return "".join(b.get("text", "") for b in msg.get("content", []) if isinstance(b, dict) and b.get("type") == "text")
+
+    assert_true("hidden reasoning here" in _anthropic_text(visible_anthropic), "show_thinking=True must surface reasoning in Anthropic message")
+    assert_true("hidden reasoning here" not in _anthropic_text(hidden_anthropic), "show_thinking=False must hide reasoning in Anthropic message")
+    assert_true("final answer" in _anthropic_text(hidden_anthropic), "show_thinking=False must preserve answer in Anthropic message")
+
+    # --- hide_reasoning_in_output helper: strip reasoning, preserve answer fallback ---
+    output_with_reasoning = [
+        {"id": "r1", "type": "reasoning", "status": "completed",
+         "summary": [{"type": "summary_text", "text": "deliberation"}]},
+        {"id": "m1", "type": "message", "status": "completed", "role": "assistant",
+         "content": [{"type": "output_text", "text": "answer"}]},
+    ]
+    stripped = hide_reasoning_in_output(output_with_reasoning)
+    assert_true(not any(isinstance(i, dict) and i.get("type") == "reasoning" for i in stripped), "hide_reasoning_in_output must remove reasoning items")
+    assert_true(any(isinstance(i, dict) and i.get("type") == "message" for i in stripped), "hide_reasoning_in_output must keep message items")
+
+    output_reasoning_only = [
+        {"id": "r1", "type": "reasoning", "status": "completed",
+         "summary": [{"type": "summary_text", "text": "only reasoning"}]},
+    ]
+    stripped_only = hide_reasoning_in_output(output_reasoning_only)
+    assert_true(any(isinstance(i, dict) and i.get("type") == "message" for i in stripped_only), "hide_reasoning_in_output must preserve reasoning as message when no text content")
+    msg_text = ""
+    for i in stripped_only:
+        if isinstance(i, dict) and i.get("type") == "message":
+            for part in i.get("content", []):
+                if isinstance(part, dict) and part.get("text"):
+                    msg_text = part["text"]
+    assert_true("only reasoning" in msg_text, "hide_reasoning_in_output must put reasoning text into message when it is the only content")
+
+
 def main() -> int:
     tmpdir = Path.cwd() / ".smoke_tmp"
     if tmpdir.exists():
@@ -1594,6 +1698,7 @@ def main() -> int:
         exercise_multimodal_chat_passthrough()
         exercise_structured_content_passthrough()
         exercise_multimodal_capability_config()
+        exercise_show_thinking_toggle_hides_reasoning()
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

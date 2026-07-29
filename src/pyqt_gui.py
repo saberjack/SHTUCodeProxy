@@ -872,6 +872,10 @@ class IosProxyApp(QMainWindow):
         self.enable_thinking_check = QCheckBox("Thinking")
         self.enable_thinking_check.setObjectName("model_enable_thinking_check")
         self.enable_thinking_check.setToolTip("Enable reasoning/thinking mode. Auto-sends enable_thinking param for vLLM models (DeepSeek, GLM)")
+        self.show_thinking_check = QCheckBox("Show Thinking")
+        self.show_thinking_check.setObjectName("model_show_thinking_check")
+        self.show_thinking_check.setToolTip("When off, the model still reasons upstream but thinking content is hidden from the user")
+        self.show_thinking_check.setChecked(True)
         self.modality_checks = QWidget()
         modality_layout = QHBoxLayout(self.modality_checks)
         modality_layout.setContentsMargins(0, 0, 0, 0)
@@ -879,6 +883,7 @@ class IosProxyApp(QMainWindow):
         modality_layout.addWidget(self.supports_audio_check)
         modality_layout.addWidget(self.supports_video_check)
         modality_layout.addWidget(self.enable_thinking_check)
+        modality_layout.addWidget(self.show_thinking_check)
         modality_layout.addStretch(1)
         for row, (label, widget) in enumerate((
             ("Display Name", self.name_edit),
@@ -1116,6 +1121,7 @@ class IosProxyApp(QMainWindow):
         self.supports_audio_check.setChecked(bool(getattr(model, "supports_audio", False)))
         self.supports_video_check.setChecked(bool(getattr(model, "supports_video", False)))
         self.enable_thinking_check.setChecked(bool(getattr(model, "enable_thinking", False) or getattr(model, "supports_reasoning", False)))
+        self.show_thinking_check.setChecked(bool(getattr(model, "show_thinking", True)))
 
     def on_api_format_changed(self, api_format: str) -> None:
         debug_log(f"api format changed value={api_format!r}")
@@ -1177,6 +1183,7 @@ class IosProxyApp(QMainWindow):
         model.stream_bridge = old_model.stream_bridge
         model.supports_reasoning = self.enable_thinking_check.isChecked()
         model.enable_thinking = self.enable_thinking_check.isChecked()
+        model.show_thinking = self.show_thinking_check.isChecked()
         if not model.model_id or not model.base_url:
             self.error("Missing value", "Model ID and Base URL are required.")
             return False

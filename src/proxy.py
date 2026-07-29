@@ -2405,7 +2405,7 @@ def normalize_tool_call_name_for_tools(tool_call: Dict[str, Any], tools: Optiona
     return updated
 
 
-def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input_tokens: int, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input_tokens: int, tools: Optional[List[Dict[str, Any]]] = None, show_thinking: bool = True) -> Dict[str, Any]:
     if isinstance(payload.get("error"), dict):
         message = payload["error"].get("message") or json.dumps(payload["error"], ensure_ascii=False)
         raise ValueError(str(message))
@@ -2436,6 +2436,8 @@ def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input
         reasoning_text = ""
     if not output_text and not reasoning_text:
         output_text = ""
+    if not show_thinking:
+        reasoning_text = ""
     output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, tools)
     output: List[Dict[str, Any]] = []
     # WHY: Merge reasoning into text with 🤔 prefix so all clients (Codex,
@@ -2516,6 +2518,29 @@ def strip_encrypted_content_from_reasoning(item: Dict[str, Any]) -> Dict[str, An
 def strip_encrypted_content_from_output(output: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove encrypted_content from all reasoning items in an output list."""
     return [strip_encrypted_content_from_reasoning(item) if isinstance(item, dict) and item.get("type") == "reasoning" else item for item in output]
+
+
+def hide_reasoning_in_output(output: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Strip reasoning content from Responses output when show_thinking is False.
+
+    WHY: Hides thinking/reasoning from the user. If reasoning is the only content
+    (e.g. model returns reasoning with no message text), preserves it as the
+    answer text so the response is not empty.
+    """
+    reasoning_text = ""
+    filtered: List[Dict[str, Any]] = []
+    for item in output:
+        if isinstance(item, dict) and item.get("type") == "reasoning":
+            summary = item.get("summary") if isinstance(item.get("summary"), list) else []
+            for part in summary:
+                if isinstance(part, dict) and part.get("text"):
+                    reasoning_text += part["text"]
+        else:
+            filtered.append(item)
+    has_text = any(isinstance(i, dict) and i.get("type") == "message" for i in filtered)
+    if not has_text and reasoning_text:
+        filtered.insert(0, {"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": reasoning_text}]})
+    return filtered
 
 def emit_redacted_thinking_sse(handler: BaseHTTPRequestHandler, index: int = 0) -> None:
     """Emit a redacted_thinking block as SSE events in an Anthropic stream.
@@ -2635,6 +2660,7 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
     # redacted_thinking as fallback.
     has_real_thinking = False
     _reasoning_as_text_fallback = ""
+    _show_thinking = getattr(model_config, "show_thinking", True)
     _wants_thinking = False  # WHY: Reasoning always emitted as text, never as thinking block
     _tool_use_items: List[Dict[str, Any]] = []  # deferred to preserve [text, tool_use] order
     for item in output:
@@ -2669,6 +2695,13 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
                 "input": parse_tool_arguments(item.get("arguments", "")),
             })
     output_text = responses_json_output_text(output)
+    if not _show_thinking:
+        # WHY: Hide reasoning content; if reasoning is the only content
+        # (e.g. qwen/glm enable_thinking returns answer in reasoning), use it as the answer.
+        if not output_text and _reasoning_as_text_fallback:
+            output_text = _reasoning_as_text_fallback
+        _reasoning_as_text_fallback = ""
+        has_real_thinking = False
     # WHY: When reasoning was not shown as thinking block, include it as
     # 🤔-prefixed text so users can see the reasoning in any client.
     if _reasoning_as_text_fallback and not has_real_thinking:
@@ -3247,6 +3280,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         model_config.model_id,
                         estimate_anthropic_input_tokens(body),
                         upstream_payload.get("tools") if isinstance(upstream_payload.get("tools"), list) else None,
+                        show_thinking=getattr(model_config, "show_thinking", True),
                     )
                     output_text = responses_json_output_text(converted.get("output", []))
                     self.send_responses_text_stream(model_config, output_text, estimate_anthropic_input_tokens(body))
@@ -3266,6 +3300,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 model_config.model_id,
                 estimate_anthropic_input_tokens(body),
                 upstream_payload.get("tools") if isinstance(upstream_payload.get("tools"), list) else None,
+                show_thinking=getattr(model_config, "show_thinking", True),
             )
             if not compact_response.get("output"):
                 raise ValueError("Empty compaction output from upstream")
@@ -3390,6 +3425,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     model_config.model_id,
                     estimate_anthropic_input_tokens(body),
                     non_stream_payload.get("tools") if isinstance(non_stream_payload.get("tools"), list) else None,
+                    show_thinking=getattr(model_config, "show_thinking", True),
                 )
                 output_text = responses_json_output_text(converted.get("output", []))
                 for output_index, item in enumerate(converted.get("output", [])):
@@ -3477,6 +3513,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": text})
                     elif kind == "reasoning" and parsed:
                         reasoning_text = parsed.get("text", "")
+                        if reasoning_text and not getattr(model_config, 'show_thinking', True):
+                            reasoning_parts.append(reasoning_text)
+                            reasoning_text = ""  # WHY: hide thinking; collected for fallback-as-answer only
                         if reasoning_text:
                             # WHY: When client did NOT request thinking, emit reasoning as
                             # regular text so it is not silently dropped (e.g. qwen-instruct,
@@ -3539,6 +3578,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         model_config.model_id,
                         estimate_value_tokens(body.get("messages")),
                         fallback_payload.get("tools") if isinstance(fallback_payload.get("tools"), list) else None,
+                        show_thinking=getattr(model_config, "show_thinking", True),
                     )
                     if converted.get("output"):
                         log(f"codex stream http error recovered via non-stream model={model_config.model_id}")
@@ -3562,6 +3602,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if DEBUG_SSE:
             log(f"DEBUG_SSE stream_event_count={_sse_count} output_text_parts_len={len(output_text_parts)}")
         output_text = "".join(output_text_parts)
+        if not getattr(model_config, 'show_thinking', True):
+            # WHY: Hide reasoning item; if no text content, reasoning is the answer
+            if not output_text and reasoning_parts:
+                output_text = "".join(reasoning_parts)
+            reasoning_parts = []
 
         output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, body.get("tools"))
         if pseudo_tool_calls:
@@ -3617,6 +3662,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         model_config.model_id,
                         estimate_anthropic_input_tokens(body),
                         retry_payload.get("tools") if isinstance(retry_payload.get("tools"), list) else None,
+                        show_thinking=getattr(model_config, "show_thinking", True),
                     )
                     output_text = responses_json_output_text(converted.get("output", []))
                 log(f"codex empty stream fallback model={model_config.model_id} chars={len(output_text)}")
@@ -3705,6 +3751,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     model_config.model_id,
                     estimate_anthropic_input_tokens(body),
                     upstream_payload.get("tools") if isinstance(upstream_payload.get("tools"), list) else None,
+                    show_thinking=getattr(model_config, "show_thinking", True),
                 )
                 if payload.get("output"):
                     # WHY: Inject reasoning placeholder for auto mode (Bug #2)
@@ -3729,6 +3776,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             model_config.model_id,
                             estimate_anthropic_input_tokens(body),
                             upstream_payload.get("tools") if isinstance(upstream_payload.get("tools"), list) else None,
+                            show_thinking=getattr(model_config, "show_thinking", True),
                         )
                         if payload.get("output"):
                             break
@@ -3767,6 +3815,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 # if thinking_requested(body) and isinstance(payload.get("output"), list):
                 #     payload["output"] = inject_redacted_thinking_to_responses_output(payload["output"])
                 #     payload["output"] = strip_encrypted_content_from_output(payload["output"])
+                if not getattr(model_config, 'show_thinking', True) and isinstance(payload.get("output"), list):
+                    payload["output"] = hide_reasoning_in_output(payload["output"])
                 send_json(self, 200, payload)
                 return
             except urllib.error.HTTPError as exc:
@@ -3801,6 +3851,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         return
                     elif kind == "reasoning" and parsed:
                         reasoning_text = parsed.get("text", "")
+                        if reasoning_text and not getattr(model_config, 'show_thinking', True):
+                            reasoning_parts.append(reasoning_text)
+                            reasoning_text = ""  # WHY: hide thinking; collected for fallback-as-answer only
                         if reasoning_text:
                             _use_as_text = True  # WHY: Always emit reasoning as text (with 🤔 prefix) so all clients can see it
                             if _use_as_text:
@@ -3907,7 +3960,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # doesn't support native reasoning. This enables Claude Code auto mode (Bug #2).
         # Use visible thinking with placeholder text instead of redacted_thinking
         # to avoid garbled output from opaque data.
-        if thinking_requested(body) and not _model_supports_reasoning:
+        if thinking_requested(body) and (not _model_supports_reasoning or not getattr(model_config, 'show_thinking', True)):
             write_sse(self, "content_block_start", {
                 "type": "content_block_start",
                 "index": _thinking_block_index,
@@ -3957,6 +4010,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             model_config.model_id,
                             estimate_value_tokens(body.get("messages")),
                             non_stream_payload.get("tools") if isinstance(non_stream_payload.get("tools"), list) else None,
+                            show_thinking=getattr(model_config, "show_thinking", True),
                         )
                         if converted.get("output"):
                             break
@@ -4079,6 +4133,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         })
                     elif kind == "reasoning" and parsed:
                         reasoning_text = parsed.get("text", "")
+                        if reasoning_text and not getattr(model_config, 'show_thinking', True):
+                            reasoning_parts.append(reasoning_text)
+                            reasoning_text = ""  # WHY: hide thinking; collected for fallback-as-answer only
                         if reasoning_text:
                             # WHY: When client requested thinking, emit reasoning as a thinking
                             # block so Claude Code displays it as collapsible reasoning.
@@ -4194,6 +4251,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         model_config.model_id,
                         estimate_value_tokens(body.get("messages")),
                         fallback_payload.get("tools") if isinstance(fallback_payload.get("tools"), list) else None,
+                        show_thinking=getattr(model_config, "show_thinking", True),
                     )
                     if converted.get("output"):
                         if thinking_requested(body):
@@ -4212,6 +4270,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         output_text = "".join(output_text_parts)
+        if not getattr(model_config, 'show_thinking', True):
+            # WHY: Hide reasoning item; if no text content, reasoning is the answer
+            if not output_text and reasoning_parts:
+                output_text = "".join(reasoning_parts)
+            reasoning_parts = []
         output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, body.get("tools"))
         if pseudo_tool_calls:
             for pseudo_tool_call in pseudo_tool_calls:
@@ -4280,6 +4343,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             retry_json, model_config.model_id,
                             estimate_anthropic_input_tokens(body),
                             retry_payload.get("tools") if isinstance(retry_payload.get("tools"), list) else None,
+                            show_thinking=getattr(model_config, "show_thinking", True),
                         )
                         output_text = responses_json_output_text(converted.get("output", []))
                 except urllib.error.HTTPError as retry_http_exc:
@@ -4316,7 +4380,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # Claude Code CLI's reactive compact counts text blocks as "assistant messages"
         # and reports "no assistant message in summarization response" if none exist.
         # Emit reasoning as a text block so compact and other CLI features can work.
-        if not text_block_started and reasoning_parts and thinking_requested(body):
+        if not text_block_started and reasoning_parts and (thinking_requested(body) or not getattr(model_config, 'show_thinking', True)):
             reasoning_text = "".join(reasoning_parts)
             if thinking_block_started:
                 write_sse(self, "content_block_stop", {"type": "content_block_stop", "index": _thinking_block_index - 1})
@@ -4434,6 +4498,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         model_config.model_id,
                         estimate_value_tokens(body.get("messages")),
                         upstream_payload.get("tools") if isinstance(upstream_payload.get("tools"), list) else None,
+                        show_thinking=getattr(model_config, "show_thinking", True),
                     )
                     if converted.get("output"):
                         break
