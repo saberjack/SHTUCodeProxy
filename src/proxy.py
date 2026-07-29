@@ -24,6 +24,8 @@ import urllib.error
 import urllib.request
 import uuid
 import socket
+import ssl
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -1920,14 +1922,71 @@ def upstream_error_message(exc: urllib.error.HTTPError) -> str:
     return f"Upstream HTTP {exc.code}: {error_body}"
 
 
+def _get_socks5_proxy() -> Optional[Tuple[str, int]]:
+    """Parse UPSTREAM_PROXY or ALL_PROXY for socks5://host:port."""
+    proxy_url = os.environ.get("UPSTREAM_PROXY") or os.environ.get("ALL_PROXY") or ""
+    if not proxy_url.startswith("socks5://"):
+        return None
+    addr = proxy_url[len("socks5://"):]
+    host, _, port_str = addr.partition(":")
+    try:
+        return host, int(port_str) if port_str else 1080
+    except ValueError:
+        return None
+
+
+def _socks5_urlopen(url: str, data: bytes, headers: Dict[str, str], timeout: int) -> http.client.HTTPResponse:
+    """Open an HTTPS URL through a SOCKS5 proxy, returning an HTTPResponse."""
+    import socks as _socks
+
+    proxy = _get_socks5_proxy()
+    if not proxy:
+        raise RuntimeError("SOCKS5 proxy not configured")
+    proxy_host, proxy_port = proxy
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
+
+    sock = _socks.socksocket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.set_proxy(_socks.SOCKS5, proxy_host, proxy_port, rdns=False)
+    sock.settimeout(timeout)
+    sock.connect((host, port))
+
+    if parsed.scheme == "https":
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        sock = ctx.wrap_socket(sock, server_hostname=host)
+
+    request_line = f"POST {path} HTTP/1.1\r\n"
+    header_lines = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+    header_lines += f"Host: {host}\r\n"
+    header_lines += f"Content-Length: {len(data)}\r\n"
+    header_lines += "Connection: close\r\n\r\n"
+
+    sock.sendall(request_line.encode() + header_lines.encode() + data)
+
+    response = http.client.HTTPResponse(sock, method="POST", url=url)
+    response.begin()
+    return response
+
+
 def open_upstream(payload: Dict[str, Any], auth_token: str, upstream_url: str, timeout: int, api_format: str = "responses") -> urllib.response.addinfourl:
+    url = normalize_upstream_url(upstream_url, api_format)
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {
         "content-type": "application/json",
         "accept": "text/event-stream" if payload.get("stream") else "application/json",
         "authorization": f"Bearer {auth_token}",
     }
-    request = urllib.request.Request(normalize_upstream_url(upstream_url, api_format), data=data, headers=headers, method="POST")
+
+    # Use SOCKS5 proxy if configured
+    if _get_socks5_proxy():
+        return _socks5_urlopen(url, data, headers, timeout)
+
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     return urllib.request.urlopen(request, timeout=timeout)
 
 
@@ -2440,14 +2499,20 @@ def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input
         reasoning_text = ""
     output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, tools)
     output: List[Dict[str, Any]] = []
-    # WHY: Merge reasoning into text with 🤔 prefix so all clients (Codex,
-    # Claude Code) can see the reasoning. No separate reasoning item needed.
-    if reasoning_text and output_text:
-        combined = "🤔 Thinking\n````\n" + reasoning_text + "\n````\n\n" + output_text
-        output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": combined}]})
-    elif reasoning_text:
-        output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "🤔 Thinking\n````\n" + reasoning_text + "\n````"}]})
-    elif output_text:
+    # WHY: Put reasoning into a separate reasoning item so Codex can display it
+    # as collapsible thinking. Other clients (e.g. translation apps) only see output_text.
+    if reasoning_text and not output_text:
+        # Reasoning-only: use reasoning as text output so users get a response
+        output_text = reasoning_text
+        reasoning_text = ""
+    if reasoning_text:
+        output.append({
+            "id": response_output_item_id(),
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": reasoning_text}],
+        })
+    if output_text:
         output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
     parsed_tool_calls = chat_tool_call_payloads(message.get("tool_calls"), False) + pseudo_tool_calls
     for offset, tool_call in enumerate(parsed_tool_calls):
@@ -3037,7 +3102,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # in Claude Code / Codex) instead of plain text.
             # budget_tokens is required by Anthropic API spec; allocate max_tokens-1
             # so thinking gets most of the budget (cc-switch uses the same strategy).
-            if not isinstance(body.get("thinking"), dict) and not classifier_request and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+            if not isinstance(body.get("thinking"), dict) and not classifier_request and getattr(model_config, "enable_thinking", False):
                 _budget = max(1, (body.get("max_tokens") or 16384) - 1)
                 body["thinking"] = {"type": "enabled", "budget_tokens": _budget}
             body_for_upstream = body
@@ -3101,7 +3166,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # WHY: When model has Thinking enabled but client didn't send thinking param,
             # inject it so reasoning content is emitted as reasoning items (collapsible
             # in Codex) instead of plain text.
-            if not isinstance(body.get("thinking"), dict) and not is_claude_auto_classifier_request(body) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+            if not isinstance(body.get("thinking"), dict) and not is_claude_auto_classifier_request(body) and getattr(model_config, "enable_thinking", False):
                 body["thinking"] = {"type": "enabled", "budget_tokens": max(1, (body.get("max_output_tokens") or body.get("max_tokens") or 16384) - 1)}
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, responses_current_user_modalities(body))
