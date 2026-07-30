@@ -1573,9 +1573,20 @@ def exercise_show_thinking_toggle_hides_reasoning() -> None:
                         return part["text"]
         return ""
 
-    assert_true("secret deliberation" in _output_text(visible_resp), "show_thinking=True must surface reasoning text")
+    def _reasoning_text(payload):
+        for item in payload.get("output", []):
+            if isinstance(item, dict) and item.get("type") == "reasoning":
+                return "".join(s.get("text", "") for s in item.get("summary", []) if isinstance(s, dict))
+        return ""
+
+    # WHY: change 1 moves reasoning into a separate reasoning item so non-Codex
+    # clients (e.g. translation apps) only see message text, never reasoning.
+    assert_true("secret deliberation" in _reasoning_text(visible_resp), "show_thinking=True must surface reasoning as a separate item")
+    assert_true("the answer" in _output_text(visible_resp), "show_thinking=True must keep the answer in the message")
+    assert_true("secret deliberation" not in _output_text(visible_resp), "reasoning must not leak into message text (breaks non-Codex clients)")
     assert_true("the answer" in _output_text(hidden_resp), "show_thinking=False must preserve the answer")
     assert_true("secret deliberation" not in _output_text(hidden_resp), "show_thinking=False must hide reasoning text")
+    assert_true(_reasoning_text(hidden_resp) == "", "show_thinking=False must emit no reasoning item")
 
     # --- reasoning-only response: hide must still return the answer ---
     chat_reasoning_only = {
@@ -1586,6 +1597,7 @@ def exercise_show_thinking_toggle_hides_reasoning() -> None:
     }
     hidden_only = chat_completion_json_to_responses(chat_reasoning_only, "hid-model", 10, None, show_thinking=False)
     assert_true("the actual answer" in _output_text(hidden_only), "show_thinking=False must use reasoning as answer when no content")
+    assert_true(_reasoning_text(hidden_only) == "", "show_thinking=False must emit no reasoning item even for reasoning-only input")
 
     # --- responses_json_to_anthropic_message: hide suppresses thinking text ---
     responses_payload = {
@@ -1603,8 +1615,17 @@ def exercise_show_thinking_toggle_hides_reasoning() -> None:
     def _anthropic_text(msg):
         return "".join(b.get("text", "") for b in msg.get("content", []) if isinstance(b, dict) and b.get("type") == "text")
 
-    assert_true("hidden reasoning here" in _anthropic_text(visible_anthropic), "show_thinking=True must surface reasoning in Anthropic message")
-    assert_true("hidden reasoning here" not in _anthropic_text(hidden_anthropic), "show_thinking=False must hide reasoning in Anthropic message")
+    def _anthropic_thinking(msg):
+        return "".join(b.get("thinking", "") for b in msg.get("content", []) if isinstance(b, dict) and b.get("type") == "thinking")
+
+    # WHY: show_thinking=True surfaces reasoning as a proper thinking block,
+    # not as text. The message text must stay clean (only the answer) so
+    # non-Codex clients (e.g. translation apps) never see reasoning text.
+    assert_true("hidden reasoning here" in _anthropic_thinking(visible_anthropic), "show_thinking=True must surface reasoning as a thinking block")
+    assert_true("final answer" in _anthropic_text(visible_anthropic), "show_thinking=True must keep answer in text block")
+    assert_true("hidden reasoning here" not in _anthropic_text(visible_anthropic), "show_thinking=True must not leak reasoning into message text")
+    assert_true("hidden reasoning here" not in _anthropic_thinking(hidden_anthropic), "show_thinking=False must hide reasoning in thinking block")
+    assert_true("hidden reasoning here" not in _anthropic_text(hidden_anthropic), "show_thinking=False must hide reasoning in text")
     assert_true("final answer" in _anthropic_text(hidden_anthropic), "show_thinking=False must preserve answer in Anthropic message")
 
     # --- hide_reasoning_in_output helper: strip reasoning, preserve answer fallback ---

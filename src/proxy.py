@@ -2440,14 +2440,20 @@ def chat_completion_json_to_responses(payload: Dict[str, Any], model: str, input
         reasoning_text = ""
     output_text, pseudo_tool_calls = parse_pseudo_function_calls(output_text, tools)
     output: List[Dict[str, Any]] = []
-    # WHY: Merge reasoning into text with 🤔 prefix so all clients (Codex,
-    # Claude Code) can see the reasoning. No separate reasoning item needed.
-    if reasoning_text and output_text:
-        combined = "🤔 Thinking\n````\n" + reasoning_text + "\n````\n\n" + output_text
-        output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": combined}]})
-    elif reasoning_text:
-        output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "🤔 Thinking\n````\n" + reasoning_text + "\n````"}]})
-    elif output_text:
+    # WHY: Put reasoning into a separate reasoning item so Codex can display it
+    # as collapsible thinking. Other clients (e.g. translation apps) only see output_text.
+    if reasoning_text and not output_text:
+        # Reasoning-only: use reasoning as text output so users get a response
+        output_text = reasoning_text
+        reasoning_text = ""
+    if reasoning_text:
+        output.append({
+            "id": response_output_item_id(),
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": reasoning_text}],
+        })
+    if output_text:
         output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
     parsed_tool_calls = chat_tool_call_payloads(message.get("tool_calls"), False) + pseudo_tool_calls
     for offset, tool_call in enumerate(parsed_tool_calls):
@@ -2661,7 +2667,11 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
     has_real_thinking = False
     _reasoning_as_text_fallback = ""
     _show_thinking = getattr(model_config, "show_thinking", True)
-    _wants_thinking = False  # WHY: Reasoning always emitted as text, never as thinking block
+    # WHY: When show_thinking is True, emit reasoning as a proper thinking block
+    # so Claude Code renders it as collapsible reasoning. The caller sets
+    # payload["_thinking_requested"] when the client sent a thinking param;
+    # we also surface reasoning whenever show_thinking is True regardless.
+    _wants_thinking = _show_thinking
     _tool_use_items: List[Dict[str, Any]] = []  # deferred to preserve [text, tool_use] order
     for item in output:
         if not isinstance(item, dict):
@@ -2702,13 +2712,14 @@ def responses_json_to_anthropic_message(payload: Dict[str, Any], model_config: M
             output_text = _reasoning_as_text_fallback
         _reasoning_as_text_fallback = ""
         has_real_thinking = False
-    # WHY: When reasoning was not shown as thinking block, include it as
-    # 🤔-prefixed text so users can see the reasoning in any client.
+    # WHY: When reasoning was not shown as a thinking block (client did not
+    # request thinking or show_thinking is False), fall back to reasoning as
+    # plain text so it is not silently dropped (e.g. qwen/glm reasoning-only).
     if _reasoning_as_text_fallback and not has_real_thinking:
         if output_text:
-            content.append({"type": "text", "text": "🤔 Thinking\n````\n" + _reasoning_as_text_fallback + "\n````\n\n" + output_text})
+            content.append({"type": "text", "text": _reasoning_as_text_fallback + "\n\n" + output_text})
         else:
-            content.append({"type": "text", "text": "🤔 Thinking\n````\n" + _reasoning_as_text_fallback + "\n````"})
+            content.append({"type": "text", "text": _reasoning_as_text_fallback})
     elif output_text:
         content.append({"type": "text", "text": output_text})
     # WHY: Append deferred tool_use items AFTER text so Anthropic content order
@@ -3037,7 +3048,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # in Claude Code / Codex) instead of plain text.
             # budget_tokens is required by Anthropic API spec; allocate max_tokens-1
             # so thinking gets most of the budget (cc-switch uses the same strategy).
-            if not isinstance(body.get("thinking"), dict) and not classifier_request and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+            if not isinstance(body.get("thinking"), dict) and not classifier_request and getattr(model_config, "enable_thinking", False):
                 _budget = max(1, (body.get("max_tokens") or 16384) - 1)
                 body["thinking"] = {"type": "enabled", "budget_tokens": _budget}
             body_for_upstream = body
@@ -3101,7 +3112,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # WHY: When model has Thinking enabled but client didn't send thinking param,
             # inject it so reasoning content is emitted as reasoning items (collapsible
             # in Codex) instead of plain text.
-            if not isinstance(body.get("thinking"), dict) and not is_claude_auto_classifier_request(body) and (getattr(model_config, "enable_thinking", False) or getattr(model_config, "supports_reasoning", False)):
+            if not isinstance(body.get("thinking"), dict) and not is_claude_auto_classifier_request(body) and getattr(model_config, "enable_thinking", False):
                 body["thinking"] = {"type": "enabled", "budget_tokens": max(1, (body.get("max_output_tokens") or body.get("max_tokens") or 16384) - 1)}
             body_for_upstream = body
             unsupported = unsupported_modalities(model_config, responses_current_user_modalities(body))
@@ -3517,25 +3528,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             reasoning_parts.append(reasoning_text)
                             reasoning_text = ""  # WHY: hide thinking; collected for fallback-as-answer only
                         if reasoning_text:
-                            # WHY: When client did NOT request thinking, emit reasoning as
-                            # regular text so it is not silently dropped (e.g. qwen-instruct,
-                            # glm-chat with enable_thinking return all content in reasoning).
-                            _use_as_text = True  # WHY: Always emit reasoning as text (with 🤔 prefix) so all clients can see it
-                            if _use_as_text:
-                                # WHY: Prepend 🤔 marker to reasoning so users can distinguish
-                                # thinking from the actual answer in any client (Codex, Claude Code, etc.)
-                                _reasoning_prefix = "🤔 Thinking\n````\n"
-                                if not _reasoning_code_open:
-                                    output_text_parts.append(_reasoning_prefix)
-                                _reasoning_code_open = True
-                                output_text_parts.append(reasoning_text)
-                                if not text_item_started:
-                                    text_item_started = True
-                                    emit("response.output_item.added", {"output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
-                                    emit("response.content_part.added", {"item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})
-                                    if _reasoning_prefix:
-                                        emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": _reasoning_prefix})
-                                emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": reasoning_text})
+                            # WHY: Emit reasoning as a separate reasoning item so Codex
+                            # displays it as collapsible thinking, not as message text.
+                            if not reasoning_item_started:
+                                reasoning_item_started = True
+                                reasoning_item_id = response_output_item_id()
+                                emit("response.output_item.added", {"output_index": 0, "item": {"id": reasoning_item_id, "type": "reasoning", "status": "in_progress", "summary": []}})
+                                emit("response.reasoning_summary_part.added", {"item_id": reasoning_item_id, "output_index": 0, "summary_index": 0, "part": {"type": "summary_text", "text": ""}})
+                            emit("response.reasoning_summary_text.delta", {"item_id": reasoning_item_id, "output_index": 0, "summary_index": 0, "delta": reasoning_text})
+                            reasoning_parts.append(reasoning_text)
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
                     elif kind == "text_done" and parsed and parsed.get("text"):
@@ -3855,22 +3856,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             reasoning_parts.append(reasoning_text)
                             reasoning_text = ""  # WHY: hide thinking; collected for fallback-as-answer only
                         if reasoning_text:
-                            _use_as_text = True  # WHY: Always emit reasoning as text (with 🤔 prefix) so all clients can see it
-                            if _use_as_text:
-                                # WHY: Prepend 🤔 marker to reasoning so users can distinguish
-                                # thinking from the actual answer in any client (Codex, Claude Code, etc.)
-                                _reasoning_prefix = "🤔 Thinking\n````\n"
-                                if not _reasoning_code_open:
-                                    output_text_parts.append(_reasoning_prefix)
-                                _reasoning_code_open = True
-                                output_text_parts.append(reasoning_text)
-                                if not text_item_started:
-                                    text_item_started = True
-                                    emit("response.output_item.added", {"output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
-                                    emit("response.content_part.added", {"item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})
-                                    if _reasoning_prefix:
-                                        emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": _reasoning_prefix})
-                                emit("response.output_text.delta", {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": reasoning_text})
+                            # WHY: Emit reasoning as a separate reasoning item so Codex
+                            # displays it as collapsible thinking, not as message text.
+                            if not reasoning_item_started:
+                                reasoning_item_started = True
+                                reasoning_item_id = response_output_item_id()
+                                emit("response.output_item.added", {"output_index": 0, "item": {"id": reasoning_item_id, "type": "reasoning", "status": "in_progress", "summary": []}})
+                                emit("response.reasoning_summary_part.added", {"item_id": reasoning_item_id, "output_index": 0, "summary_index": 0, "part": {"type": "summary_text", "text": ""}})
+                            emit("response.reasoning_summary_text.delta", {"item_id": reasoning_item_id, "output_index": 0, "summary_index": 0, "delta": reasoning_text})
+                            reasoning_parts.append(reasoning_text)
                     elif kind == "done":
                         done_payload = parsed
                         break
@@ -3885,14 +3879,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # WHY: If we received reasoning content during streaming, add the completed
         # reasoning item to the output before the text message item.
         reasoning_text_joined = "".join(reasoning_parts)
-        # WHY: Merge reasoning into text with 🤔 code block format so all clients can see it
-        if reasoning_text_joined and output_text:
-            combined = "🤔 Thinking\n```\n" + reasoning_text_joined + "\n```\n\n" + output_text
-            output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": combined}]})
-        elif reasoning_text_joined:
-            combined = "🤔 Thinking\n```\n" + reasoning_text_joined + "\n```"
-            output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": combined}]})
-        elif output_text:
+        if reasoning_text_joined:
+            output.append({"id": reasoning_item_id or response_output_item_id(), "type": "reasoning", "status": "completed", "summary": [{"type": "summary_text", "text": reasoning_text_joined}]})
+        if output_text:
             output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
         for offset, tool_call in enumerate(tool_calls):
             output.append(codex_function_call_item(tool_call, offset))
@@ -4137,54 +4126,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             reasoning_parts.append(reasoning_text)
                             reasoning_text = ""  # WHY: hide thinking; collected for fallback-as-answer only
                         if reasoning_text:
-                            # WHY: When client requested thinking, emit reasoning as a thinking
-                            # block so Claude Code displays it as collapsible reasoning.
-                            # When client did NOT request thinking, emit reasoning as regular
-                            # text so it is not silently dropped (e.g. qwen-instruct, glm-chat
-                            # with enable_thinking return all content in reasoning).
-                            _use_as_text = not thinking_requested(body)  # WHY: When client requests thinking, emit as thinking block so Claude Code renders it incrementally; otherwise emit as text with 🤔 prefix
-                            if _use_as_text:
-                                # WHY: Prepend 🤔 marker to reasoning so users can distinguish
-                                # thinking from the actual answer in any client
-                                _reasoning_prefix = "🤔 Thinking\n````\n"
-                                if not _reasoning_code_open:
-                                    output_text_parts.append(_reasoning_prefix)
-                                _reasoning_code_open = True
-                                if not text_block_started:
-                                    write_sse(self, "content_block_start", {
-                                        "type": "content_block_start",
-                                        "index": _thinking_block_index,
-                                        "content_block": {"type": "text", "text": ""},
-                                    })
-                                    text_block_started = True
-                                    if _reasoning_prefix:
-                                        write_sse(self, "content_block_delta", {
-                                            "type": "content_block_delta",
-                                            "index": _thinking_block_index,
-                                            "delta": {"type": "text_delta", "text": _reasoning_prefix},
-                                        })
-                                output_text_parts.append(reasoning_text)
-                                delta_count += 1
-                                write_sse(self, "content_block_delta", {
-                                    "type": "content_block_delta",
+                            # WHY: Emit reasoning as a thinking block so Claude Code displays
+                            # it as collapsible reasoning. show_thinking=False already
+                            # suppressed it above; here show_thinking=True so surface it.
+                            if not thinking_block_started:
+                                write_sse(self, "content_block_start", {
+                                    "type": "content_block_start",
                                     "index": _thinking_block_index,
-                                    "delta": {"type": "text_delta", "text": reasoning_text},
+                                    "content_block": {"type": "thinking", "thinking": ""},
                                 })
-                            else:
-                                reasoning_parts.append(reasoning_text)
-                                if not thinking_block_started:
-                                    thinking_block_started = True
-                                    write_sse(self, "content_block_start", {
-                                        "type": "content_block_start",
-                                        "index": _thinking_block_index,
-                                        "content_block": {"type": "thinking", "thinking": ""},
-                                    })
-                                    _thinking_block_index += 1
-                                write_sse(self, "content_block_delta", {
-                                    "type": "content_block_delta",
-                                    "index": _thinking_block_index - 1,
-                                    "delta": {"type": "thinking_delta", "thinking": reasoning_text},
-                                })
+                                thinking_block_started = True
+                            output_text_parts.append(reasoning_text)
+                            delta_count += 1
+                            write_sse(self, "content_block_delta", {
+                                "type": "content_block_delta",
+                                "index": _thinking_block_index,
+                                "delta": {"type": "thinking_delta", "text": reasoning_text},
+                            })
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
                     elif kind == "text_done" and parsed and parsed.get("text"):
