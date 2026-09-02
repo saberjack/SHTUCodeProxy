@@ -28,6 +28,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import base64
+from io import BytesIO
+
+from PIL import Image
+
 from platform_utils import app_dir
 from config_store import CLAUDE_MODEL_ALIASES, AppConfig, ModelConfig, config_path, load_config
 
@@ -355,13 +360,14 @@ def current_config() -> AppConfig:
     return ACTIVE_CONFIG
 
 
-_MAX_BODY_LENGTH = 10 * 1024 * 1024  # 10 MB
+_DEFAULT_MAX_BODY_MB = 64  # Used only when config has no value.
 
 
 def read_json_body(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
     length = int(handler.headers.get("content-length", "0") or "0")
-    if length > _MAX_BODY_LENGTH:
-        send_json(handler, 413, {"type": "error", "error": {"type": "invalid_request_error", "message": f"Request body too large: {length} bytes (max {_MAX_BODY_LENGTH})"}})
+    max_body_length = max(1, current_config().max_body_mb) * 1024 * 1024
+    if length > max_body_length:
+        send_json(handler, 413, {"type": "error", "error": {"type": "invalid_request_error", "message": f"Request body too large: {length} bytes (max {max_body_length})"}})
         # WHY: the oversized body was NOT read, so keep-alive would parse the
         # leftover bytes as the next request line (URI Too Long). Close instead.
         handler.close_connection = True
@@ -378,8 +384,8 @@ def read_json_body(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
                 if not chunk:
                     break
                 chunks.append(chunk)
-                if sum(len(c) for c in chunks) > _MAX_BODY_LENGTH:
-                    send_json(handler, 413, {"type": "error", "error": {"type": "invalid_request_error", "message": f"Request body too large (max {_MAX_BODY_LENGTH})"}})
+                if sum(len(c) for c in chunks) > max_body_length:
+                    send_json(handler, 413, {"type": "error", "error": {"type": "invalid_request_error", "message": f"Request body too large (max {max_body_length})"}})
                     handler.close_connection = True
                     raise _BodyTooLargeError()
         except (socket.timeout, OSError):
@@ -439,14 +445,20 @@ def normalize_content_part(part: Dict[str, Any]) -> Any:
         return {"type": "input_text", "text": ""}
     if part_type in ("text", "input_text"):
         return copy_cache_metadata(part, {"type": "input_text", "text": part.get("text", "")})
-    if part_type in ("input_image", "input_file"):
+    if part_type == "input_image":
+        image_url = part.get("image_url") or part.get("url")
+        if isinstance(image_url, str):
+            return copy_cache_metadata(part, {"type": "input_image", "image_url": compressed_image_data_url(image_url)})
+        return dict(part)
+    if part_type == "input_file":
         return dict(part)
     if part_type == "image":
         source = part.get("source") or {}
         if source.get("type") == "base64":
             media_type = source.get("media_type", "image/png")
             data = source.get("data", "")
-            return copy_cache_metadata(part, {"type": "input_image", "image_url": f"data:{media_type};base64,{data}"})
+            image_url = compressed_image_data_url(f"data:{media_type};base64,{data}")
+            return copy_cache_metadata(part, {"type": "input_image", "image_url": image_url})
         if source.get("type") == "url":
             return copy_cache_metadata(part, {"type": "input_image", "image_url": source.get("url", "")})
     if part_type == "document":
@@ -461,26 +473,67 @@ def normalize_content_part(part: Dict[str, Any]) -> Any:
     return copy_cache_metadata(part, {"type": "input_text", "text": json.dumps(part, ensure_ascii=False)})
 
 
+_IMAGE_MAX_EDGE = 1568
+_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _encode_image_bytes(image: "Image.Image", quality: int) -> bytes:
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=quality, optimize=True)
+    return buffer.getvalue()
+
+
+def compressed_image_data_url(url: str) -> str:
+    if not url.startswith("data:image/") or ";base64," not in url:
+        return url
+    encoded = url.split(";base64,", 1)[1]
+    try:
+        raw = base64.b64decode(encoded, validate=False)
+    except Exception:
+        return url
+    if len(raw) <= _IMAGE_MAX_BYTES:
+        return url
+    try:
+        image = Image.open(BytesIO(raw))
+        image.load()
+    except Exception:
+        return url
+    image.thumbnail((_IMAGE_MAX_EDGE, _IMAGE_MAX_EDGE))
+    if image.mode != "RGB":
+        background = Image.new("RGB", image.size, (255, 255, 255))
+        if "A" in image.getbands():
+            background.paste(image, mask=image.split()[-1])
+        else:
+            background.paste(image.convert("RGB"))
+        image = background
+    output = _encode_image_bytes(image, 85)
+    quality = 85
+    while len(output) > _IMAGE_MAX_BYTES and quality > 30:
+        quality -= 10
+        output = _encode_image_bytes(image, quality)
+    return "data:image/jpeg;base64," + base64.b64encode(output).decode("ascii")
+
+
 def image_url_from_part(part: Dict[str, Any]) -> Optional[str]:
     part_type = part.get("type")
     if part_type == "image_url":
         image_url = part.get("image_url")
         if isinstance(image_url, dict):
-            return str(image_url.get("url") or "")
+            return compressed_image_data_url(str(image_url.get("url") or ""))
         if isinstance(image_url, str):
-            return image_url
+            return compressed_image_data_url(image_url)
     if part_type == "input_image":
         image_url = part.get("image_url") or part.get("url")
         if isinstance(image_url, str):
-            return image_url
+            return compressed_image_data_url(image_url)
     if part_type == "image":
         source = part.get("source") or {}
         if source.get("type") == "base64":
             media_type = source.get("media_type", "image/png")
             data = source.get("data", "")
-            return f"data:{media_type};base64,{data}"
+            return compressed_image_data_url(f"data:{media_type};base64,{data}")
         if source.get("type") == "url":
-            return str(source.get("url") or "")
+            return compressed_image_data_url(str(source.get("url") or ""))
     return None
 
 

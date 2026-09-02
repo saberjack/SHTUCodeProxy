@@ -52,6 +52,7 @@ if (-not $OneFileOnly) {
     --add-data "VERSION;." `
     --add-data "docs\headless-config.example.json;." `
     --paths src `
+    --hidden-import PIL.Image `
     --hidden-import PyQt5.QtCore `
     --hidden-import PyQt5.QtGui `
     --hidden-import PyQt5.QtWidgets `
@@ -91,6 +92,7 @@ if (-not $OneDirOnly) {
     --add-data "VERSION;." `
     --add-data "docs\headless-config.example.json;." `
     --paths src `
+    --hidden-import PIL.Image `
     --hidden-import PyQt5.QtCore `
     --hidden-import PyQt5.QtGui `
     --hidden-import PyQt5.QtWidgets `

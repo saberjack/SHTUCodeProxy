@@ -200,6 +200,8 @@ class AppConfig:
     update_include_prerelease: bool
     update_auto_download: bool
     models: List[ModelConfig]
+    max_body_mb: int = 64
+    image_compression_enabled: bool = True
 
     @classmethod
     def default(cls) -> "AppConfig":
@@ -219,7 +221,9 @@ class AppConfig:
             codex_config_path=default_codex_config_path(),
             codex_auth_path=default_codex_auth_path(),
             default_stream=True,
+            max_body_mb=64,
             diagnostic_logging=False,
+            image_compression_enabled=True,
             update_check_enabled=True,
             update_check_interval_hours=24,
             update_include_prerelease=False,
@@ -278,7 +282,9 @@ class AppConfig:
             codex_config_path=portable_codex_config_path(str(data.get("codex_config_path") or default.codex_config_path)),
             codex_auth_path=portable_codex_auth_path(str(data.get("codex_auth_path") or default.codex_auth_path)),
             default_stream=bool(data.get("default_stream", default.default_stream)),
+            max_body_mb=max(1, int(data.get("max_body_mb") or default.max_body_mb)),
             diagnostic_logging=bool(data.get("diagnostic_logging", default.diagnostic_logging)),
+            image_compression_enabled=bool(data.get("image_compression_enabled", default.image_compression_enabled)),
             update_check_enabled=bool(data.get("update_check_enabled", default.update_check_enabled)),
             update_check_interval_hours=int(data.get("update_check_interval_hours", default.update_check_interval_hours)),
             update_include_prerelease=bool(data.get("update_include_prerelease", default.update_include_prerelease)),
@@ -305,6 +311,8 @@ class AppConfig:
             "codex_config_path": self.codex_config_path,
             "codex_auth_path": self.codex_auth_path,
             "default_stream": self.default_stream,
+            "max_body_mb": self.max_body_mb,
+            "image_compression_enabled": self.image_compression_enabled,
             "diagnostic_logging": self.diagnostic_logging,
             "update_check_enabled": self.update_check_enabled,
             "update_check_interval_hours": self.update_check_interval_hours,

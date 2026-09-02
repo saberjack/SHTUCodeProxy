@@ -2,6 +2,7 @@
 # Python 3.10+ required
 
 PyQt5>=5.15.11
+Pillow>=10.0
 
 # Note: The following are Python stdlib (no pip install needed):
 # - tomllib (3.11+)

@@ -746,6 +746,10 @@ class IosProxyApp(QMainWindow):
         self.default_model_edit = FocusGlowLineEdit(self.config_data.default_model_id)
         self.default_model_edit.setReadOnly(True)
         self.timeout_edit = FocusGlowLineEdit(str(self.config_data.timeout))
+        self.max_body_edit = FocusGlowLineEdit(str(self.config_data.max_body_mb))
+        self.image_compression_check = QCheckBox("Auto-compress images")
+        self.image_compression_check.setToolTip("Resize and re-encode large base64 images before forwarding upstream.")
+        self.image_compression_check.setChecked(bool(self.config_data.image_compression_enabled))
         self.claude_path_edit = FocusGlowLineEdit(self.config_data.claude_path)
         self.claude_settings_path_edit = FocusGlowLineEdit(self.config_data.claude_settings_path)
         self.codex_config_path_edit = FocusGlowLineEdit(self.config_data.codex_config_path)
@@ -754,9 +758,11 @@ class IosProxyApp(QMainWindow):
         self.add_field(server_layout, 0, "Port", self.port_edit, 2)
         self.add_field(server_layout, 0, "Current Main Model", self.default_model_edit, 4)
         self.add_field(server_layout, 0, "Timeout", self.timeout_edit, 6)
+        self.add_field(server_layout, 0, "Max Body MB", self.max_body_edit, 8)
         self.default_stream_check = QCheckBox("Default streaming")
         self.default_stream_check.setToolTip("Use streaming responses when the client request does not explicitly set stream=false.")
         self.default_stream_check.setChecked(bool(self.config_data.default_stream))
+        server_layout.addWidget(self.image_compression_check, 0, 10, 1, 2, alignment=Qt.AlignVCenter)
         server_layout.addWidget(self.default_stream_check, 0, 8, 1, 2, alignment=Qt.AlignVCenter)
         self.add_path_row(server_layout, 1, "Claude Code Path", self.claude_path_edit, self.browse_claude_path)
         self.add_path_row(server_layout, 2, "Claude Settings Path", self.claude_settings_path_edit, self.browse_claude_settings_path)
@@ -1244,8 +1250,9 @@ class IosProxyApp(QMainWindow):
         try:
             port = int(self.port_edit.text().strip())
             timeout = int(self.timeout_edit.text().strip())
+            max_body_mb = int(self.max_body_edit.text().strip())
         except ValueError:
-            self.error("Invalid number", "Port and timeout must be numbers.")
+            self.error("Invalid number", "Port, timeout, and max body MB must be numbers.")
             return False
         self.config_data.host = self.host_edit.text().strip() or "127.0.0.1"
         self.config_data.port = port
@@ -1272,6 +1279,8 @@ class IosProxyApp(QMainWindow):
         self.config_data.codex_reasoning_effort = reasoning if reasoning in CODEX_REASONING_EFFORTS else "high"
         self.codex_reasoning_combo.setCurrentText(self.config_data.codex_reasoning_effort)
         self.config_data.timeout = timeout
+        self.config_data.max_body_mb = max(1, max_body_mb)
+        self.config_data.image_compression_enabled = self.image_compression_check.isChecked()
         self.config_data.claude_path = portable_claude_path(self.claude_path_edit.text().strip() or default_claude_path())
         self.config_data.claude_settings_path = portable_settings_path(self.claude_settings_path_edit.text().strip() or default_claude_settings_path())
         self.config_data.codex_config_path = portable_codex_config_path(self.codex_config_path_edit.text().strip() or default_codex_config_path())
