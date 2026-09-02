@@ -763,7 +763,7 @@ class IosProxyApp(QMainWindow):
         self.default_stream_check.setToolTip("Use streaming responses when the client request does not explicitly set stream=false.")
         self.default_stream_check.setChecked(bool(self.config_data.default_stream))
         server_layout.addWidget(self.image_compression_check, 0, 10, 1, 2, alignment=Qt.AlignVCenter)
-        server_layout.addWidget(self.default_stream_check, 0, 8, 1, 2, alignment=Qt.AlignVCenter)
+        server_layout.addWidget(self.default_stream_check, 0, 12, 1, 2, alignment=Qt.AlignVCenter)
         self.add_path_row(server_layout, 1, "Claude Code Path", self.claude_path_edit, self.browse_claude_path)
         self.add_path_row(server_layout, 2, "Claude Settings Path", self.claude_settings_path_edit, self.browse_claude_settings_path)
         self.add_path_row(server_layout, 3, "Codex config.toml Path", self.codex_config_path_edit, self.browse_codex_config_path)
