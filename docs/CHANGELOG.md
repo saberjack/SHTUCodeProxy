@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.9.5 (2026-09-24)
+
+Per-model custom thinking parameters release.
+
+### Added
+
+- **Custom upstream thinking params per model**: model config now supports `upstream_thinking_params` and exposes a JSON editor in the GUI. When set to a non-empty JSON object, it overrides the legacy thinking payload; for example `{"chat_template_kwargs":{"thinking":true},"reasoning_effort":"max"}` sends those keys to the upstream request.
+- **Preserved default behavior**: with the JSON field empty, chat-completions models continue to receive the existing `chat_template_kwargs: {"enable_thinking": true}` payload.
+- Apply validates that custom thinking input is a JSON object and shows an explicit error for malformed or non-object JSON.
+
+### Validation
+
+- `python -m py_compile src/config_store.py src/proxy.py src/pyqt_gui.py tests/smoke_test.py` PASS.
+- `python tests/smoke_test.py` PASS.
+- Offscreen GUI regression `tests/test_custom_thinking_params_gui.py` PASS.
+
 ## v4.8.8 (2026-07-16)
 
 GUI model config bugfix release.

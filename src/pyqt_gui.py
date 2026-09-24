@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -882,6 +883,13 @@ class IosProxyApp(QMainWindow):
         self.show_thinking_check.setObjectName("model_show_thinking_check")
         self.show_thinking_check.setToolTip("When off, the model still reasons upstream but thinking content is hidden from the user")
         self.show_thinking_check.setChecked(True)
+        self.thinking_params_edit = QPlainTextEdit()
+        self.thinking_params_edit.setObjectName("model_thinking_params_edit")
+        self.thinking_params_edit.setPlaceholderText('{\n  "chat_template_kwargs": {"thinking": true},\n  "reasoning_effort": "max"\n}')
+        self.thinking_params_edit.setToolTip(
+            'Optional custom thinking parameters sent to upstream. '
+            'When set, these override the default enable_thinking payload.'
+        )
         self.modality_checks = QWidget()
         modality_layout = QHBoxLayout(self.modality_checks)
         modality_layout.setContentsMargins(0, 0, 0, 0)
@@ -899,16 +907,19 @@ class IosProxyApp(QMainWindow):
             ("Upstream Model", self.upstream_model_edit),
             ("API Format", self.api_format_combo),
             ("Input Types", self.modality_checks),
+            ("Custom Thinking Params (JSON)", self.thinking_params_edit),
         )):
             edit_layout.addWidget(QLabel(label), row, 0)
             edit_layout.addWidget(widget, row, 1)
+        self.thinking_params_edit.setMinimumHeight(88)
+        self.thinking_params_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         model_hint = QLabel("Step 1: Fill API Key, Base URL, API Format, Upstream Model, and which input types this route supports.")
         model_hint.setObjectName("SectionHint")
-        edit_layout.addWidget(model_hint, 7, 0, 1, 2)
+        edit_layout.addWidget(model_hint, 8, 0, 1, 2)
         important_hint = QLabel("Important: For GPT models, choose API Format = responses.")
         important_hint.setObjectName("DangerText")
-        edit_layout.addWidget(important_hint, 8, 0, 1, 2)
-        edit_layout.addWidget(self.button("Apply Model Changes", self.apply_model, primary=True), 9, 1, alignment=Qt.AlignRight)
+        edit_layout.addWidget(important_hint, 9, 0, 1, 2)
+        edit_layout.addWidget(self.button("Apply Model Changes", self.apply_model, primary=True), 10, 1, alignment=Qt.AlignRight)
         edit_layout.setColumnStretch(1, 1)
         body.addWidget(edit_group, 2)
         main.addLayout(body)
@@ -1128,6 +1139,10 @@ class IosProxyApp(QMainWindow):
         self.supports_video_check.setChecked(bool(getattr(model, "supports_video", False)))
         self.enable_thinking_check.setChecked(bool(getattr(model, "enable_thinking", False) or getattr(model, "supports_reasoning", False)))
         self.show_thinking_check.setChecked(bool(getattr(model, "show_thinking", True)))
+        thinking_params = getattr(model, "upstream_thinking_params", None)
+        self.thinking_params_edit.setPlainText(
+            json.dumps(thinking_params, ensure_ascii=False, indent=2) if thinking_params else ""
+        )
 
     def on_api_format_changed(self, api_format: str) -> None:
         debug_log(f"api format changed value={api_format!r}")
@@ -1190,6 +1205,16 @@ class IosProxyApp(QMainWindow):
         model.supports_reasoning = self.enable_thinking_check.isChecked()
         model.enable_thinking = self.enable_thinking_check.isChecked()
         model.show_thinking = self.show_thinking_check.isChecked()
+        thinking_params_text = self.thinking_params_edit.toPlainText().strip()
+        try:
+            parsed_thinking_params = json.loads(thinking_params_text) if thinking_params_text else {}
+        except (TypeError, json.JSONDecodeError) as exc:
+            self.error("Invalid thinking parameters", f"Custom thinking parameters must be a JSON object.\n\n{exc}")
+            return False
+        if not isinstance(parsed_thinking_params, dict):
+            self.error("Invalid thinking parameters", "Custom thinking parameters must be a JSON object.")
+            return False
+        model.upstream_thinking_params = parsed_thinking_params
         if not model.model_id or not model.base_url:
             self.error("Missing value", "Model ID and Base URL are required.")
             return False

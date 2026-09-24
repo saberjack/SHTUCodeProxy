@@ -1258,7 +1258,13 @@ def sanitized_upstream_payload_for_model(payload: Dict[str, Any], model_config: 
     # Only send for chat_completions format; Responses API (GPT-5.5 etc.) rejects it.
     if isinstance(result, dict) and result.pop("_reasoning_enabled", False):
         if model_config.api_format == "chat_completions":
-            result["chat_template_kwargs"] = {"enable_thinking": True}
+            # WHY: some vLLM upstreams expect other thinking switches, so an
+            # explicit custom payload must win over the legacy enable_thinking.
+            custom_params = getattr(model_config, "upstream_thinking_params", None)
+            if isinstance(custom_params, dict) and custom_params:
+                result.update(custom_params)
+            else:
+                result["chat_template_kwargs"] = {"enable_thinking": True}
     return result
 
 

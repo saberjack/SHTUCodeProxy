@@ -79,6 +79,7 @@ app.py
 | 文件 | 职责 |
 |------|------|
 | `smoke_test.py` | 基本冒烟测试 |
+| `test_custom_thinking_params_gui.py` | 自定义思考参数 GUI 离屏回归 |
 | `api_notes.py` | API 笔记/测试辅助 |
 
 ### `release/` — 发布产物

@@ -155,6 +155,49 @@ def exercise_classifier_suppresses_reasoning_for_enable_thinking_model() -> None
     assert_true(sanitized_regular.get("_reasoning_enabled"), "regular request must still enable thinking for enable_thinking models")
 
 
+def exercise_custom_thinking_params() -> None:
+    # WHY: different vLLM deployments expose different thinking switches, while
+    # existing users rely on the original enable_thinking payload. Custom JSON
+    # must replace that payload only when explicitly configured.
+    thinking_model = ModelConfig(
+        name="Default Thinking",
+        model_id="default-thinking",
+        base_url="https://example.invalid/v1/start",
+        api_key="test-key",
+        upstream_model="default-thinking",
+        api_format="chat_completions",
+        supports_reasoning=True,
+        enable_thinking=True,
+    )
+    default_payload = sanitized_upstream_payload_for_model({"_reasoning_enabled": True}, thinking_model)
+    assert_true(
+        default_payload.get("chat_template_kwargs") == {"enable_thinking": True},
+        "empty custom params must preserve the legacy enable_thinking request",
+    )
+    assert_true("reasoning_effort" not in default_payload, "empty custom params must not add custom fields")
+
+    custom_model = ModelConfig.from_dict({
+        **thinking_model.to_dict(),
+        "upstream_thinking_params": {
+            "chat_template_kwargs": {"thinking": True},
+            "reasoning_effort": "max",
+        },
+    })
+    custom_payload = sanitized_upstream_payload_for_model({"_reasoning_enabled": True}, custom_model)
+    assert_true(
+        custom_payload.get("chat_template_kwargs") == {"thinking": True},
+        "custom thinking params must override the legacy thinking switch",
+    )
+    assert_true(custom_payload.get("reasoning_effort") == "max", "custom reasoning_effort must be forwarded upstream")
+
+    roundtrip = ModelConfig.from_dict(custom_model.to_dict())
+    assert_true(
+        roundtrip.upstream_thinking_params == custom_model.upstream_thinking_params,
+        "custom thinking params must survive config save/load round-trip",
+    )
+    legacy_model = ModelConfig.from_dict(thinking_model.to_dict())
+    assert_true(legacy_model.upstream_thinking_params == {}, "legacy config must default to empty custom params")
+
 
 def exercise_tool_call_translation() -> None:
     body = {
@@ -1692,6 +1735,7 @@ def main() -> int:
         assert_true(portable_settings_path("").endswith(str(Path(".claude") / "settings.json")), "settings fallback mismatch")
         exercise_claude_auto_classifier_detection()
         exercise_classifier_suppresses_reasoning_for_enable_thinking_model()
+        exercise_custom_thinking_params()
         exercise_anthropic_stream_delta_usage_shape(tmpdir)
         exercise_tool_call_translation()
         exercise_cache_control_passthrough()
